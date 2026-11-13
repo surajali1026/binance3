@@ -134,6 +134,7 @@ class ChartViewModel(
     private var countdownJob: Job? = null
     private var drawingsJob: Job? = null
     private var alertsSymbolJob: Job? = null
+    private var persistJob: Job? = null
     private var unsubscribeTickers: (() -> Unit)? = null
     private var lastPlotWidthPx = 900f
     private var hasReachedEarliestHistory = false
@@ -572,6 +573,7 @@ class ChartViewModel(
         if (_viewport.value.isAutoFit) {
             autoFitIfNeeded(candles)
         }
+        persistChartState()
     }
 
     fun pinchZoom(
@@ -1011,12 +1013,14 @@ class ChartViewModel(
     }
 
     private fun persistChartState() {
-        val sym = _symbol.value
-        val tfId = _timeframeId.value
-        val src = _priceSource.value
-        val spacingDp = (_viewport.value.barSpacingPx / 2.6f).coerceIn(3f, 40f)
-        val rightBars = _viewport.value.rightOffsetBars
-        viewModelScope.launch {
+        persistJob?.cancel()
+        persistJob = viewModelScope.launch {
+            delay(300L)
+            val sym = _symbol.value
+            val tfId = _timeframeId.value
+            val src = _priceSource.value
+            val spacingDp = (_viewport.value.barSpacingPx / 2.6f).coerceIn(3f, 40f)
+            val rightBars = _viewport.value.rightOffsetBars
             chartStateRepository.updatePreferences { prefs ->
                 prefs.copy(
                     lastSymbol = sym,

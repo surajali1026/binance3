@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -84,6 +85,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -380,16 +382,16 @@ fun ChartCanvas(
                                 var vy = if (unlockedVerticalThisGesture) velocity.y.coerceIn(-3500f, 3500f) else 0f
                                 if (hypot(vx, vy) > 160f) {
                                     flingJob = gestureScope.launch {
-                                        var lastNano = System.nanoTime()
+                                        var lastFrameNanos = withFrameNanos { it }
                                         while (isActive && hypot(vx, vy) > 25f) {
-                                            delay(16L)
-                                            val nowNano = System.nanoTime()
-                                            val dtSec = ((nowNano - lastNano) / 1_000_000_000f).coerceIn(0.008f, 0.032f)
-                                            lastNano = nowNano
+                                            val frameNanos = withFrameNanos { it }
+                                            val dtSec = ((frameNanos - lastFrameNanos) / 1_000_000_000f)
+                                                .coerceIn(0.001f, 0.032f)
+                                            lastFrameNanos = frameNanos
                                             onPan(vx * dtSec, vy * dtSec, plotHeightPx)
-                                            val friction = 0.91f
-                                            vx *= friction
-                                            vy *= friction
+                                            val decay = exp(-5.5f * dtSec)
+                                            vx *= decay
+                                            vy *= decay
                                         }
                                     }
                                 }

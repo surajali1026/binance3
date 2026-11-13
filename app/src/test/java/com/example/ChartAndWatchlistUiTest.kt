@@ -1,10 +1,17 @@
 package com.example
 
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.pinch
+import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.unit.dp
 import com.example.domain.model.Candle
 import com.example.domain.model.DrawingTool
 import com.example.domain.model.FuturesContract
@@ -184,5 +191,67 @@ class ChartAndWatchlistUiTest {
         assertEquals(true, lockedToggled)
         assertEquals(true, deleted)
         assertEquals(90080.0, quickAlertClickedPrice!!, 0.001)
+    }
+
+    @Test
+    fun `chart canvas pointerInput handles drag to scroll and pinch to zoom`() {
+        val now = 1_700_000_000_000L
+        val candles = (0 until 40).map { i ->
+            val t = now + i * 900_000L
+            Candle(t, t + 899_999L, 90000.0 + i * 15, 90120.0 + i * 15, 89880.0 + i * 15, 90040.0 + i * 15, 100.0, true)
+        }
+        val state = ChartUiState(
+            symbol = "BTCUSDT",
+            candles = candles,
+            isLoadingHistory = false
+        )
+        var totalPanX = 0f
+        var pinchCount = 0
+        var lastZoomX = 1f
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                ChartCanvas(
+                    state = state,
+                    onPlotWidthChanged = {},
+                    onPan = { dx, _, _ -> totalPanX += dx },
+                    onPinchZoom = { zx, _, _, _, _ ->
+                        pinchCount++
+                        lastZoomX = zx
+                    },
+                    onScalePriceAxis = {},
+                    onResetPriceAutoFit = {},
+                    onScaleTimeAxis = {},
+                    onCrosshairMove = { _, _, _ -> },
+                    onChartTap = { _, _, _, _ -> },
+                    onMoveDrawingAnchor = { _, _, _ -> },
+                    onMoveWholeDrawing = { _, _, _ -> },
+                    onMoveAlertPrice = { _, _ -> },
+                    onPriceAxisTap = {},
+                    onQuickAlertPlusClick = {},
+                    modifier = Modifier.size(400.dp, 300.dp)
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("chart_plot_canvas").performTouchInput {
+            swipeRight(startX = width * 0.25f, endX = width * 0.75f, durationMillis = 120L)
+        }
+        composeTestRule.waitForIdle()
+        assertEquals(true, totalPanX > 20f)
+
+        composeTestRule.onNodeWithTag("chart_plot_canvas").performTouchInput {
+            pinch(
+                start0 = Offset(width * 0.4f, height * 0.5f),
+                end0 = Offset(width * 0.15f, height * 0.5f),
+                start1 = Offset(width * 0.6f, height * 0.5f),
+                end1 = Offset(width * 0.85f, height * 0.5f),
+                durationMillis = 150L
+            )
+        }
+        composeTestRule.waitForIdle()
+        assertEquals(true, pinchCount > 0)
+        assertEquals(true, lastZoomX > 1.0f)
     }
 }
