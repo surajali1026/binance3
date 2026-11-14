@@ -23,7 +23,8 @@ import kotlin.math.abs
 private class ChartJavascriptBridge(
     var onTap: (Long, Double) -> Unit,
     var onCrosshair: (Long, Double) -> Unit,
-    var onQuickAlert: (Double) -> Unit
+    var onQuickAlert: (Double) -> Unit,
+    var onManualInteraction: () -> Unit
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
     @JavascriptInterface fun onChartTap(timeSeconds: Double, price: Double) {
@@ -37,6 +38,7 @@ private class ChartJavascriptBridge(
     @JavascriptInterface fun onQuickAlert(price: Double) {
         mainHandler.post { onQuickAlert(price) }
     }
+    @JavascriptInterface fun onManualInteraction() { mainHandler.post { onManualInteraction() } }
     @JavascriptInterface fun onReady() = Unit
     @JavascriptInterface fun onError(message: String) = Unit
 }
@@ -48,13 +50,14 @@ fun LightweightChartView(
     onChartTap: (Long, Double, Int) -> Unit,
     onCrosshairMove: (Long, Double) -> Unit,
     onQuickAlert: (Double) -> Unit,
+    onManualInteraction: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     var pageLoaded by remember { mutableStateOf(false) }
 
     val bridge = remember {
-        ChartJavascriptBridge({ _, _ -> }, { _, _ -> }, { })
+        ChartJavascriptBridge({ _, _ -> }, { _, _ -> }, { }, { })
     }
     bridge.onTap = { time, price ->
         val candles = state.displayedCandles
@@ -63,6 +66,7 @@ fun LightweightChartView(
     }
     bridge.onCrosshair = onCrosshairMove
     bridge.onQuickAlert = onQuickAlert
+    bridge.onManualInteraction = onManualInteraction
 
     val payload = remember(state.displayedCandles, state.alertsForSymbol, state.drawings) {
         val root = JSONObject()
