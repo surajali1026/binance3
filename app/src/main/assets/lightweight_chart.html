@@ -36,12 +36,15 @@ html,body,#chart{margin:0;width:100%;height:100%;overflow:hidden;background:#090
   try{
    const d=JSON.parse(payload);
    candles.setData(d.candles||[]);
+   if(!hasInitialData && (d.candles||[]).length){chart.timeScale().fitContent();hasInitialData=true;}
+   else if(d.fit){chart.timeScale().scrollToRealTime();}
    volume.setData((d.candles||[]).map(x=>({time:x.time,value:x.volume||0,color:x.close>=x.open?'rgba(14,203,129,.35)':'rgba(246,70,93,.35)'})));
    clearLines();
+   activeDrawings=d.drawings||[];
    (d.lines||[]).forEach(l=>{
     if(Number.isFinite(l.price)&&l.price>0) lines.push(candles.createPriceLine({price:l.price,color:l.color||'#f0b90b',lineWidth:1,lineStyle:l.dashed?LightweightCharts.LineStyle.Dashed:LightweightCharts.LineStyle.Solid,axisLabelVisible:true,title:l.title||''}));
    });
-   if(d.fit) chart.timeScale().fitContent();
+   requestAnimationFrame(paintDrawings);
   }catch(e){ if(window.AndroidChart) AndroidChart.onError(String(e)); }
  };
  chart.subscribeCrosshairMove(p=>{
