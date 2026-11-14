@@ -711,6 +711,168 @@ fun BarReplayControllerBar(
 }
 
 @Composable
+fun FullScreenTimeframeBar(
+    state: ChartUiState,
+    onOpenCoinSwitcher: () -> Unit,
+    onSelectTimeframe: (String) -> Unit,
+    onOpenTimeframePicker: () -> Unit,
+    onAutoFit: () -> Unit,
+    onStartReplay: () -> Unit,
+    onExitFullScreen: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val pct = state.ticker?.priceChangePercent24h ?: 0.0
+    val isUp = pct >= 0.0
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .background(CanvasVoid)
+            .padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Compact Symbol + 24h % Switcher
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(ElevatedSurface)
+                .border(0.75.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                .clickable(onClick = onOpenCoinSwitcher)
+                .padding(horizontal = 7.dp, vertical = 4.dp)
+                .testTag("fullscreen_coin_switcher"),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = state.symbol.removeSuffix("USDT"),
+                style = MaterialTheme.typography.bodySmall,
+                color = TextPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = ChartNumberFormatter.formatPercent(pct),
+                style = TabularMonoStyle.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                color = if (isUp) BullishGreen else BearishRed
+            )
+        }
+
+        Spacer(modifier = Modifier.width(6.dp))
+
+        // Scrollable Timeframes + More
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val favs = state.favoriteTimeframes
+            val showActiveOutsideFavs = favs.none { it.id == state.activeTimeframe.id }
+            val visibleList = if (showActiveOutsideFavs) favs + state.activeTimeframe else favs
+
+            visibleList.forEach { tf ->
+                val selected = tf.id == state.activeTimeframe.id
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (selected) ToolbarSurface else Color.Transparent)
+                        .clickable { onSelectTimeframe(tf.id) }
+                        .padding(horizontal = 7.dp, vertical = 4.dp)
+                        .testTag("tf_chip_${tf.id}")
+                ) {
+                    Text(
+                        text = tf.label,
+                        style = TabularMonoStyle.copy(
+                            fontSize = 11.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                        ),
+                        color = if (selected) AmberGold else TextMuted
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(ElevatedSurface)
+                    .border(0.5.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                    .clickable(onClick = onOpenTimeframePicker)
+                    .padding(horizontal = 7.dp, vertical = 4.dp)
+                    .testTag("open_timeframe_picker")
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "More",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextPrimary,
+                        fontSize = 10.sp
+                    )
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = "All Timeframes",
+                        tint = TextMuted,
+                        modifier = Modifier.size(13.dp)
+                    )
+                }
+            }
+        }
+
+        // Auto-fit Reset & Replay
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (!state.viewport.isAutoFit) AmberGold.copy(alpha = 0.14f) else Color.Transparent)
+                .clickable(onClick = onAutoFit)
+                .padding(horizontal = 6.dp, vertical = 5.dp)
+                .testTag("chart_autofit_button")
+        ) {
+            Icon(
+                imageVector = Icons.Filled.FitScreen,
+                contentDescription = "Reset Price & Fit Chart",
+                tint = if (!state.viewport.isAutoFit) AmberGold else CyanInfo,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(onClick = onStartReplay)
+                .padding(horizontal = 6.dp, vertical = 5.dp)
+                .testTag("chart_replay_button")
+        ) {
+            Icon(
+                imageVector = Icons.Filled.History,
+                contentDescription = "Bar Replay",
+                tint = if (state.replayState.isActive || state.replayState.isPickingStart) AmberGold else TextMuted,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.width(2.dp))
+
+        // Exit Full Screen Button
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(7.dp))
+                .background(ElevatedSurface)
+                .border(0.75.dp, BorderSubtle, RoundedCornerShape(7.dp))
+                .clickable(onClick = onExitFullScreen)
+                .padding(horizontal = 7.dp, vertical = 5.dp)
+                .testTag("exit_fullscreen_button")
+        ) {
+            Icon(
+                imageVector = Icons.Filled.FullscreenExit,
+                contentDescription = "Exit Full Screen",
+                tint = TextPrimary,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+    }
+}
+
+@Composable
 fun FullScreenExitChip(
     onExitFullScreen: () -> Unit,
     modifier: Modifier = Modifier

@@ -301,6 +301,8 @@ class MarketRepository(
         activeBybitWatchlistTopics = topSymbols
     }
 
+    fun currentExchangeTimeMillis(): Long = socketManager.currentExchangeTimeMillis()
+
     suspend fun fetchKlines(
         symbol: String,
         pair: String,
@@ -316,6 +318,15 @@ class MarketRepository(
                 timeframe = timeframe,
                 endTime = endTime
             )
+
+            if (endTime == null && parsedBase.isNotEmpty()) {
+                val latest = parsedBase.last()
+                val localNow = System.currentTimeMillis()
+                if (localNow < latest.openTime || localNow > latest.closeTime) {
+                    val span = (latest.closeTime - latest.openTime).coerceAtLeast(1_000L)
+                    socketManager.seedServerOffsetIfUnsynced(latest.openTime + min(span / 2L, 15_000L))
+                }
+            }
 
             val cacheKey = CandleCacheKey(symbol, priceSource, timeframe.id, resolvedMode)
             val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }
@@ -468,6 +479,7 @@ class MarketRepository(
         val cacheKey = CandleCacheKey(symbol, priceSource, timeframe.id, mode)
         val (baseInterval, baseMs) = CandleAggregator.pickBaseInterval(timeframe, mode)
         val lastKlineWsMillis = AtomicLong(0L)
+        val lastTradeEmitMillis = AtomicLong(0L)
 
         fun aggregateIfNeeded(cache: LinkedHashMap<Long, Candle>, baseCandle: Candle): Candle {
             return if (CandleAggregator.isNativeSupported(timeframe, mode)) {
@@ -482,11 +494,13 @@ class MarketRepository(
             }
         }
 
-        fun applyTickToBaseCache(tickPrice: Double): Candle {
-            val now = System.currentTimeMillis()
+        fun applyTickToBaseCache(tickPrice: Double, serverNowMs: Long = currentExchangeTimeMillis()): Candle {
+            val effectiveNow = if (serverNowMs > 1_500_000_000_000L) serverNowMs else currentExchangeTimeMillis()
             val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }
             return synchronized(cache) {
-                val bucketStart = (now / baseMs) * baseMs
+                val lastExisting = cache.values.lastOrNull()
+                val rawBucketStart = (effectiveNow / baseMs) * baseMs
+                val bucketStart = if (lastExisting != null) max(rawBucketStart, lastExisting.openTime) else rawBucketStart
                 val bucketClose = bucketStart + baseMs - 1L
                 val existing = cache[bucketStart]
                 val updatedBase = if (existing != null) {
@@ -497,10 +511,8 @@ class MarketRepository(
                         isClosed = false
                     )
                 } else {
-                    cache.values.lastOrNull()?.let { prev ->
-                        if (!prev.isClosed && prev.openTime < bucketStart) {
-                            cache[prev.openTime] = prev.copy(isClosed = true)
-                        }
+                    if (lastExisting != null && !lastExisting.isClosed && lastExisting.openTime < bucketStart) {
+                        cache[lastExisting.openTime] = lastExisting.copy(isClosed = true)
                     }
                     Candle(
                         openTime = bucketStart,
@@ -518,20 +530,31 @@ class MarketRepository(
             }
         }
 
-        val topics: List<String> = if (mode == MarketEndpointMode.BYBIT_LINEAR) {
-            val bybitInterval = BybitPayloadParser.toBybitInterval(baseInterval)
-            listOf(
-                BinanceSocketManager.bybitKlineTopic(symbol, bybitInterval),
-                BinanceSocketManager.bybitTickerTopic(symbol)
-            )
-        } else {
-            val klineStream = BinanceSocketManager.klineStreamName(
-                symbol = symbol,
-                pair = pair.ifBlank { symbol },
-                priceSource = priceSource,
-                nativeInterval = baseInterval
-            )
-            listOf(klineStream)
+        val topics: List<String> = when (mode) {
+            MarketEndpointMode.BYBIT_LINEAR -> {
+                val bybitInterval = BybitPayloadParser.toBybitInterval(baseInterval)
+                buildList {
+                    add(BinanceSocketManager.bybitKlineTopic(symbol, bybitInterval))
+                    add(BinanceSocketManager.bybitTickerTopic(symbol))
+                    if (priceSource == PriceSource.LAST) {
+                        add(BinanceSocketManager.bybitTradeTopic(symbol))
+                    }
+                }
+            }
+            else -> {
+                val klineStream = BinanceSocketManager.klineStreamName(
+                    symbol = symbol,
+                    pair = pair.ifBlank { symbol },
+                    priceSource = priceSource,
+                    nativeInterval = baseInterval
+                )
+                buildList {
+                    add(klineStream)
+                    if (priceSource == PriceSource.LAST) {
+                        add(BinanceSocketManager.tradeStreamName(symbol, mode == MarketEndpointMode.VISION_MIRROR))
+                    }
+                }
+            }
         }
         val targetKlineTopic = topics.first()
         socketManager.subscribe(topics)
@@ -560,10 +583,29 @@ class MarketRepository(
                 val baseCandle = update.candle
                 val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }
                 val emittedCandle = synchronized(cache) {
+                    val existingLast = cache.values.lastOrNull()
+                    if (existingLast != null && existingLast.openTime < baseCandle.openTime && !existingLast.isClosed) {
+                        cache[existingLast.openTime] = existingLast.copy(isClosed = true)
+                    }
                     cache[baseCandle.openTime] = baseCandle
                     aggregateIfNeeded(cache, baseCandle)
                 }
                 emitIfChanged(emittedCandle)
+            }
+        }
+
+        val tradeJob = launch(Dispatchers.IO) {
+            if (priceSource != PriceSource.LAST) return@launch
+            socketManager.tradeUpdates.collect { trade ->
+                if (!trade.symbol.equals(symbol, ignoreCase = true)) return@collect
+                lastKlineWsMillis.set(System.currentTimeMillis())
+                val updated = applyTickToBaseCache(trade.price, trade.timestampMs)
+                val nowLocal = System.currentTimeMillis()
+                val prevEmit = lastTradeEmitMillis.get()
+                if (nowLocal - prevEmit >= 65L) {
+                    lastTradeEmitMillis.set(nowLocal)
+                    emitIfChanged(updated)
+                }
             }
         }
 
@@ -573,13 +615,7 @@ class MarketRepository(
                     val tick = updates.firstOrNull { it.symbol.equals(symbol, ignoreCase = true) } ?: return@collect
                     val price = tick.lastPrice ?: return@collect
                     if (price <= 0.0) return@collect
-                    val now = System.currentTimeMillis()
-                    val msSinceKline = now - lastKlineWsMillis.get()
-                    val cache = baseCandleCache[cacheKey]
-                    val lastBaseCloseTime = cache?.let { synchronized(it) { it.values.lastOrNull()?.closeTime } } ?: 0L
-                    if (msSinceKline > 1200L || now > lastBaseCloseTime) {
-                        emitIfChanged(applyTickToBaseCache(price))
-                    }
+                    emitIfChanged(applyTickToBaseCache(price))
                 }
             } else {
                 socketManager.markPriceUpdates.collect { updates ->
@@ -587,7 +623,7 @@ class MarketRepository(
                     val price = if (priceSource == PriceSource.MARK) tick.markPrice else tick.indexPrice
                     if (price == null || price <= 0.0) return@collect
                     if (mode == MarketEndpointMode.BYBIT_LINEAR ||
-                        System.currentTimeMillis() - lastKlineWsMillis.get() > 1500L
+                        System.currentTimeMillis() - lastKlineWsMillis.get() > 900L
                     ) {
                         emitIfChanged(applyTickToBaseCache(price))
                     }
@@ -597,8 +633,8 @@ class MarketRepository(
 
         val restSyncFallbackJob = launch(Dispatchers.IO) {
             while (isActive) {
-                delay(4000L)
-                val staleWs = System.currentTimeMillis() - lastKlineWsMillis.get() > 5000L
+                delay(1500L)
+                val staleWs = System.currentTimeMillis() - lastKlineWsMillis.get() > 2500L
                 if (staleWs || socketManager.connectionState.value != SocketConnectionState.CONNECTED) {
                     runCatching {
                         val (parsed, resolvedMode) = fetchKlinesWithFallback(
@@ -610,13 +646,20 @@ class MarketRepository(
                         )
                         if (parsed.isNotEmpty() && resolvedMode == mode) {
                             val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }
-                            val latest = synchronized(cache) {
+                            val toEmit = synchronized(cache) {
+                                val prevLastTime = cache.values.lastOrNull()?.openTime ?: 0L
                                 parsed.takeLast(5).forEach { c -> cache[c.openTime] = c }
-                                val tail = cache.values.lastOrNull()
-                                tail?.let { aggregateIfNeeded(cache, it) }
+                                val list = mutableListOf<Candle>()
+                                if (parsed.size >= 2 && parsed.last().openTime > prevLastTime) {
+                                    list.add(aggregateIfNeeded(cache, parsed[parsed.lastIndex - 1]))
+                                }
+                                cache.values.lastOrNull()?.let { tail ->
+                                    list.add(aggregateIfNeeded(cache, tail))
+                                }
+                                list
                             }
-                            if (latest != null) {
-                                emitIfChanged(latest)
+                            for (c in toEmit) {
+                                emitIfChanged(c)
                             }
                         }
                     }
@@ -626,6 +669,7 @@ class MarketRepository(
 
         awaitClose {
             klineJob.cancel()
+            tradeJob.cancel()
             tickerCandleJob.cancel()
             restSyncFallbackJob.cancel()
             socketManager.unsubscribe(topics)

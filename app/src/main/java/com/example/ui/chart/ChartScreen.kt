@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -130,6 +131,7 @@ fun ChartScreen(
         modifier
             .fillMaxSize()
             .background(CanvasVoid)
+            .windowInsetsPadding(WindowInsets.displayCutout)
     } else {
         modifier
             .fillMaxSize()
@@ -139,7 +141,17 @@ fun ChartScreen(
     }
 
     Column(modifier = containerModifier) {
-        if (!state.isFullScreen) {
+        if (state.isFullScreen) {
+            FullScreenTimeframeBar(
+                state = state,
+                onOpenCoinSwitcher = { showCoinSwitcher = true },
+                onSelectTimeframe = viewModel::selectTimeframe,
+                onOpenTimeframePicker = { showTimeframePicker = true },
+                onAutoFit = viewModel::triggerAutoFit,
+                onStartReplay = viewModel::startBarReplayPicker,
+                onExitFullScreen = viewModel::toggleFullScreen
+            )
+        } else {
             ChartTopHud(
                 state = state,
                 showBackButton = showBackButton,
@@ -222,16 +234,6 @@ fun ChartScreen(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .fillMaxWidth()
-                )
-            }
-
-            // Full-screen exit button in corner when full-screen is active
-            if (state.isFullScreen) {
-                FullScreenExitChip(
-                    onExitFullScreen = viewModel::toggleFullScreen,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 12.dp, end = 80.dp)
                 )
             }
 

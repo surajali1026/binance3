@@ -146,6 +146,7 @@ private class ChartSyncTracker {
     var syncedSeriesKey: String? = null
     var syncedFirstTime: Long = -1L
     var syncedCount: Int = 0
+    var syncedLastBar: Candle? = null
     var lastOverlayJson: String = ""
 }
 
@@ -460,6 +461,7 @@ fun LightweightChartView(
         tracker.syncedSeriesKey = update.seriesKey
         tracker.syncedFirstTime = update.candles.first().openTime
         tracker.syncedCount = update.candles.size
+        tracker.syncedLastBar = update.candles.lastOrNull()
         view.evaluateJavascript(
             "window.setMarketData && window.setMarketData(${JSONObject.quote(payload)})",
             null
@@ -470,6 +472,24 @@ fun LightweightChartView(
     val currentSeriesKey = "${state.symbol}_${state.activeTimeframe.id}_${state.priceSource.name}"
     val currentFirstTime = currentCandles.firstOrNull()?.openTime ?: -1L
     val currentCount = currentCandles.size
+    val currentLastBar = currentCandles.lastOrNull()
+
+    fun pushDeltaBars(view: WebView, seriesKey: String, deltaBars: List<Candle>, totalCount: Int) {
+        if (deltaBars.isEmpty()) return
+        tracker.syncedCount = totalCount
+        tracker.syncedLastBar = deltaBars.last()
+        val deltaPayload = JSONObject().apply {
+            put("seriesKey", seriesKey)
+            put("totalCount", totalCount)
+            val bars = JSONArray()
+            deltaBars.forEach { candle -> bars.put(candle.toJsonObject()) }
+            put("bars", bars)
+        }.toString()
+        view.evaluateJavascript(
+            "window.updateLastCandle && window.updateLastCandle(${JSONObject.quote(deltaPayload)})",
+            null
+        )
+    }
 
     // Guarantee initial history (and symbol/tf/pagination/replay changes) always reach WebView
     // even if SharedFlow emitted before chartReady flipped, while ignoring live 0/+1 bar ticks!
@@ -494,6 +514,24 @@ fun LightweightChartView(
         }
     }
 
+    // Catch-up live bar sync if state changed while collector was starting or delta arrived out-of-band
+    LaunchedEffect(chartReady, useFallbackCanvas, currentSeriesKey, currentLastBar) {
+        if (useFallbackCanvas || !chartReady || currentLastBar == null) return@LaunchedEffect
+        val view = webView ?: return@LaunchedEffect
+        if (tracker.syncedSeriesKey == currentSeriesKey &&
+            tracker.syncedLastBar != currentLastBar &&
+            currentCount in tracker.syncedCount..(tracker.syncedCount + 1)
+        ) {
+            val prevSyncedTime = tracker.syncedLastBar?.openTime ?: -1L
+            val barsToSend = if (currentLastBar.openTime > prevSyncedTime && currentCandles.size >= 2) {
+                listOf(currentCandles[currentCandles.lastIndex - 1], currentLastBar)
+            } else {
+                listOf(currentLastBar)
+            }
+            pushDeltaBars(view, currentSeriesKey, barsToSend, currentCount)
+        }
+    }
+
     // Collect live candle delta updates without resending full historical candle list
     LaunchedEffect(chartReady, useFallbackCanvas, webUpdates) {
         if (useFallbackCanvas || !chartReady) return@LaunchedEffect
@@ -504,7 +542,8 @@ fun LightweightChartView(
                     val alreadySynced =
                         tracker.syncedSeriesKey == update.seriesKey &&
                             tracker.syncedFirstTime == (update.candles.firstOrNull()?.openTime ?: -1L) &&
-                            tracker.syncedCount == update.candles.size
+                            tracker.syncedCount == update.candles.size &&
+                            tracker.syncedLastBar == update.candles.lastOrNull()
                     if (!alreadySynced) {
                         pushFullHistory(view, update, includeOverlay = tracker.syncedSeriesKey == null)
                     }
@@ -514,19 +553,8 @@ fun LightweightChartView(
                         latestBuildFullHistory()?.let { full ->
                             pushFullHistory(view, full, includeOverlay = true)
                         }
-                    } else if (update.candles.isNotEmpty()) {
-                        tracker.syncedCount = update.totalCount
-                        val deltaPayload = JSONObject().apply {
-                            put("seriesKey", update.seriesKey)
-                            put("totalCount", update.totalCount)
-                            val bars = JSONArray()
-                            update.candles.forEach { candle -> bars.put(candle.toJsonObject()) }
-                            put("bars", bars)
-                        }.toString()
-                        view.evaluateJavascript(
-                            "window.updateLastCandle && window.updateLastCandle(${JSONObject.quote(deltaPayload)})",
-                            null
-                        )
+                    } else if (update.candles.isNotEmpty() && update.candles.last() != tracker.syncedLastBar) {
+                        pushDeltaBars(view, update.seriesKey, update.candles, update.totalCount)
                     }
                 }
                 ChartWebUpdate.ResetScroll -> {
@@ -666,6 +694,7 @@ fun LightweightChartView(
                 tracker.syncedSeriesKey = null
                 tracker.syncedFirstTime = -1L
                 tracker.syncedCount = 0
+                tracker.syncedLastBar = null
                 tracker.lastOverlayJson = ""
                 view.removeJavascriptInterface("AndroidChart")
                 view.stopLoading()

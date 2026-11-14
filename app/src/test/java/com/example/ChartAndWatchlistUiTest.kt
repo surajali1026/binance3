@@ -306,4 +306,38 @@ class ChartAndWatchlistUiTest {
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("BTCUSDT").assertIsDisplayed()
     }
+
+    @Test
+    fun `fullscreen bar displays timeframes picker and exit button in portrait and landscape`() {
+        var selectedTf = ""
+        var openedPicker = false
+        var exitedFullScreen = false
+        val state = ChartUiState(
+            symbol = "BTCUSDT",
+            isFullScreen = true
+        )
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                com.example.ui.chart.FullScreenTimeframeBar(
+                    state = state,
+                    onOpenCoinSwitcher = {},
+                    onSelectTimeframe = { selectedTf = it },
+                    onOpenTimeframePicker = { openedPicker = true },
+                    onAutoFit = {},
+                    onStartReplay = {},
+                    onExitFullScreen = { exitedFullScreen = true }
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("tf_chip_15m").assertIsDisplayed().performClick()
+        composeTestRule.onNodeWithTag("open_timeframe_picker").assertIsDisplayed().performClick()
+        composeTestRule.onNodeWithTag("exit_fullscreen_button").assertIsDisplayed().performClick()
+
+        assertEquals("15m", selectedTf)
+        assertEquals(true, openedPicker)
+        assertEquals(true, exitedFullScreen)
+    }
 }

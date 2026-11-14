@@ -30,6 +30,7 @@ import com.example.domain.model.Timeframe
 import com.example.domain.model.WatchlistItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -165,7 +166,10 @@ class ChartViewModel(
 
     private val _drawingsForSymbol = MutableStateFlow<List<ChartDrawing>>(emptyList())
     private val _alertsForSymbol = MutableStateFlow<List<PriceAlert>>(emptyList())
-    private val _webChartUpdates = MutableSharedFlow<ChartWebUpdate>(extraBufferCapacity = 64)
+    private val _webChartUpdates = MutableSharedFlow<ChartWebUpdate>(
+        extraBufferCapacity = 128,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
     val webChartUpdates: SharedFlow<ChartWebUpdate> = _webChartUpdates.asSharedFlow()
 
     fun buildCurrentFullHistoryUpdate(): ChartWebUpdate.FullHistory? {
@@ -1207,7 +1211,7 @@ class ChartViewModel(
             while (isActive) {
                 val lastCandle = uiState.value.displayedCandles.lastOrNull()
                 if (lastCandle != null && !uiState.value.replayState.isActive) {
-                    val rem = (lastCandle.closeTime + 1L - System.currentTimeMillis()).coerceAtLeast(0L)
+                    val rem = (lastCandle.closeTime + 1L - marketRepository.currentExchangeTimeMillis()).coerceAtLeast(0L)
                     _countdownMillis.value = rem
                 } else {
                     _countdownMillis.value = 0L

@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,7 +21,9 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.min
 
 enum class SocketConnectionState {
@@ -51,14 +54,45 @@ class BinanceSocketManager(
     private val _connectionState = MutableStateFlow(SocketConnectionState.DISCONNECTED)
     val connectionState: StateFlow<SocketConnectionState> = _connectionState.asStateFlow()
 
-    private val _tickerUpdates = MutableSharedFlow<List<WsTickerUpdate>>(extraBufferCapacity = 64)
+    private val _tickerUpdates = MutableSharedFlow<List<WsTickerUpdate>>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
     val tickerUpdates: SharedFlow<List<WsTickerUpdate>> = _tickerUpdates.asSharedFlow()
 
-    private val _markPriceUpdates = MutableSharedFlow<List<WsMarkPriceUpdate>>(extraBufferCapacity = 64)
+    private val _markPriceUpdates = MutableSharedFlow<List<WsMarkPriceUpdate>>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
     val markPriceUpdates: SharedFlow<List<WsMarkPriceUpdate>> = _markPriceUpdates.asSharedFlow()
 
-    private val _klineUpdates = MutableSharedFlow<WsKlineUpdate>(extraBufferCapacity = 128)
+    private val _klineUpdates = MutableSharedFlow<WsKlineUpdate>(
+        extraBufferCapacity = 128,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
     val klineUpdates: SharedFlow<WsKlineUpdate> = _klineUpdates.asSharedFlow()
+
+    private val _tradeUpdates = MutableSharedFlow<WsTradeUpdate>(
+        extraBufferCapacity = 256,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val tradeUpdates: SharedFlow<WsTradeUpdate> = _tradeUpdates.asSharedFlow()
+
+    private val serverTimeOffsetMs = AtomicLong(0L)
+    private val hasServerTimeSync = AtomicBoolean(false)
+
+    fun currentExchangeTimeMillis(): Long = System.currentTimeMillis() + serverTimeOffsetMs.get()
+
+    fun updateServerTimestamp(serverMs: Long) {
+        if (serverMs <= 1_500_000_000_000L) return
+        serverTimeOffsetMs.set(serverMs - System.currentTimeMillis())
+        hasServerTimeSync.set(true)
+    }
+
+    fun seedServerOffsetIfUnsynced(approxServerMs: Long) {
+        if (hasServerTimeSync.get() || approxServerMs <= 1_500_000_000_000L) return
+        serverTimeOffsetMs.set(approxServerMs - System.currentTimeMillis())
+    }
 
     fun setStreamBaseUrl(newUrl: String) {
         synchronized(lock) {
@@ -187,14 +221,18 @@ class BinanceSocketManager(
                             rawText = text,
                             onTickers = { _tickerUpdates.tryEmit(it) },
                             onMarkPrices = { _markPriceUpdates.tryEmit(it) },
-                            onKline = { _klineUpdates.tryEmit(it) }
+                            onKline = { _klineUpdates.tryEmit(it) },
+                            onTrade = { _tradeUpdates.tryEmit(it) },
+                            onServerTimestamp = { updateServerTimestamp(it) }
                         )
                     } else {
                         BinancePayloadParser.parseSocketMessage(
                             rawText = text,
                             onTickers = { _tickerUpdates.tryEmit(it) },
                             onMarkPrices = { _markPriceUpdates.tryEmit(it) },
-                            onKline = { _klineUpdates.tryEmit(it) }
+                            onKline = { _klineUpdates.tryEmit(it) },
+                            onTrade = { _tradeUpdates.tryEmit(it) },
+                            onServerTimestamp = { updateServerTimestamp(it) }
                         )
                     }
                 }
@@ -265,7 +303,9 @@ class BinanceSocketManager(
     ) {
         if (streams.isEmpty() || targetSocket == null) return
         if (isBybitSocket()) {
-            val bybitTopics = streams.filter { it.startsWith("kline.") || it.startsWith("tickers.") }
+            val bybitTopics = streams.filter {
+                it.startsWith("kline.") || it.startsWith("tickers.") || it.startsWith("publicTrade.")
+            }
             if (bybitTopics.isEmpty()) return
             val op = if (method == "UNSUBSCRIBE") "unsubscribe" else "subscribe"
             bybitTopics.chunked(10).forEach { chunk ->
@@ -276,7 +316,9 @@ class BinanceSocketManager(
                 targetSocket.send(json.toString())
             }
         } else {
-            val binanceStreams = streams.filterNot { it.startsWith("kline.") || it.startsWith("tickers.") }
+            val binanceStreams = streams.filterNot {
+                it.startsWith("kline.") || it.startsWith("tickers.") || it.startsWith("publicTrade.")
+            }
             if (binanceStreams.isEmpty()) return
             // Batch into chunks of 40 streams to respect Binance frame limits
             binanceStreams.chunked(40).forEach { chunk ->
@@ -306,8 +348,20 @@ class BinanceSocketManager(
             }
         }
 
+        fun tradeStreamName(symbol: String, isVisionMirror: Boolean): String {
+            return if (isVisionMirror) {
+                "${symbol.lowercase()}@trade"
+            } else {
+                "${symbol.lowercase()}@aggTrade"
+            }
+        }
+
         fun bybitKlineTopic(symbol: String, bybitInterval: String): String {
             return "kline.$bybitInterval.${symbol.uppercase()}"
+        }
+
+        fun bybitTradeTopic(symbol: String): String {
+            return "publicTrade.${symbol.uppercase()}"
         }
 
         fun bybitTickerTopic(symbol: String): String {

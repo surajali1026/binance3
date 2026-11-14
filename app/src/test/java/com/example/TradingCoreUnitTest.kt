@@ -183,6 +183,33 @@ class TradingCoreUnitTest {
         )
         assertEquals(91420.5, partialMark!!, 0.001)
         assertNull(partialIndex)
+
+        // Binance aggTrade and Bybit publicTrade fast live tick parsing + server clock sync
+        var binanceTradePrice: Double? = null
+        var binanceServerTs = 0L
+        BinancePayloadParser.parseSocketMessage(
+            rawText = """{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1700000123456,"s":"BTCUSDT","p":"91499.8","q":"0.25"}}""",
+            onTickers = {},
+            onMarkPrices = {},
+            onKline = {},
+            onTrade = { binanceTradePrice = it.price },
+            onServerTimestamp = { binanceServerTs = it }
+        )
+        assertEquals(91499.8, binanceTradePrice!!, 0.001)
+        assertEquals(1700000123456L, binanceServerTs)
+
+        var bybitTradePrice: Double? = null
+        var bybitServerTs = 0L
+        BybitPayloadParser.parseSocketMessage(
+            rawText = """{"topic":"publicTrade.BTCUSDT","ts":1700000123999,"data":[{"s":"BTCUSDT","p":"91512.3","T":1700000123990}]}""",
+            onTickers = {},
+            onMarkPrices = {},
+            onKline = {},
+            onTrade = { bybitTradePrice = it.price },
+            onServerTimestamp = { bybitServerTs = it }
+        )
+        assertEquals(91512.3, bybitTradePrice!!, 0.001)
+        assertEquals(1700000123999L, bybitServerTs)
     }
 
     @Test

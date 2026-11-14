@@ -845,6 +845,9 @@ html,body{
                 for(let i = 0; i < bars.length; i++){
                     const bar = toBar(bars[i]);
                     if(!bar) continue;
+                    if(lastCandleTime != null && bar.time < lastCandleTime){
+                        continue;
+                    }
                     candles.update(bar);
                     volume.update(toVolumeBar(bar));
                     if(barTimes.length && bar.time === barTimes[barTimes.length - 1]){

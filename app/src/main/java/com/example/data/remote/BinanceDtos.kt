@@ -111,6 +111,12 @@ data class WsMarkPriceUpdate(
     val indexPrice: Double?
 )
 
+data class WsTradeUpdate(
+    val symbol: String,
+    val price: Double,
+    val timestampMs: Long
+)
+
 object BinancePayloadParser {
     fun parseKlineArray(jsonText: String): List<Candle> {
         val root = JSONArray(jsonText)
@@ -144,7 +150,9 @@ object BinancePayloadParser {
         rawText: String,
         onTickers: (List<WsTickerUpdate>) -> Unit,
         onMarkPrices: (List<WsMarkPriceUpdate>) -> Unit,
-        onKline: (WsKlineUpdate) -> Unit
+        onKline: (WsKlineUpdate) -> Unit,
+        onTrade: (WsTradeUpdate) -> Unit = {},
+        onServerTimestamp: (Long) -> Unit = {}
     ) {
         val root = JSONObject(rawText)
         if (!root.has("stream") || !root.has("data")) return
@@ -153,8 +161,11 @@ object BinancePayloadParser {
             stream == "!ticker@arr" -> {
                 val arr = root.getJSONArray("data")
                 val list = ArrayList<WsTickerUpdate>(arr.length())
+                var latestEventTs = 0L
                 for (i in 0 until arr.length()) {
                     val item = arr.getJSONObject(i)
+                    val ev = item.optLong("E", 0L)
+                    if (ev > latestEventTs) latestEventTs = ev
                     list.add(
                         WsTickerUpdate(
                             symbol = item.getString("s"),
@@ -166,13 +177,17 @@ object BinancePayloadParser {
                         )
                     )
                 }
+                if (latestEventTs > 1_500_000_000_000L) onServerTimestamp(latestEventTs)
                 onTickers(list)
             }
             stream == "!markPrice@arr@1s" -> {
                 val arr = root.getJSONArray("data")
                 val list = ArrayList<WsMarkPriceUpdate>(arr.length())
+                var latestEventTs = 0L
                 for (i in 0 until arr.length()) {
                     val item = arr.getJSONObject(i)
+                    val ev = item.optLong("E", 0L)
+                    if (ev > latestEventTs) latestEventTs = ev
                     val mark = item.optString("p").toDoubleOrNull()
                     val index = item.optString("i").toDoubleOrNull()
                     if (mark != null || index != null) {
@@ -185,10 +200,29 @@ object BinancePayloadParser {
                         )
                     }
                 }
+                if (latestEventTs > 1_500_000_000_000L) onServerTimestamp(latestEventTs)
                 onMarkPrices(list)
+            }
+            stream.endsWith("@aggTrade") || stream.endsWith("@trade") -> {
+                val data = root.getJSONObject("data")
+                val symbol = data.optString("s", stream.substringBefore("@")).uppercase()
+                val price = data.optString("p").toDoubleOrNull()
+                val ev = data.optLong("E", data.optLong("T", 0L))
+                if (ev > 1_500_000_000_000L) onServerTimestamp(ev)
+                if (symbol.isNotBlank() && price != null && price > 0.0) {
+                    onTrade(
+                        WsTradeUpdate(
+                            symbol = symbol,
+                            price = price,
+                            timestampMs = if (ev > 0L) ev else System.currentTimeMillis()
+                        )
+                    )
+                }
             }
             stream.contains("@kline_") || stream.contains("@markPriceKline_") || stream.contains("@indexPriceKline_") -> {
                 val data = root.getJSONObject("data")
+                val ev = data.optLong("E", 0L)
+                if (ev > 1_500_000_000_000L) onServerTimestamp(ev)
                 val k = data.optJSONObject("k") ?: return
                 val symbol = data.optString("s", data.optString("ps", k.optString("s", ""))).uppercase()
                 val priceSource = when {
@@ -349,9 +383,13 @@ object BybitPayloadParser {
         rawText: String,
         onTickers: (List<WsTickerUpdate>) -> Unit,
         onMarkPrices: (List<WsMarkPriceUpdate>) -> Unit,
-        onKline: (WsKlineUpdate) -> Unit
+        onKline: (WsKlineUpdate) -> Unit,
+        onTrade: (WsTradeUpdate) -> Unit = {},
+        onServerTimestamp: (Long) -> Unit = {}
     ) {
         val root = JSONObject(rawText)
+        val serverTs = root.optLong("ts", 0L)
+        if (serverTs > 1_500_000_000_000L) onServerTimestamp(serverTs)
         val topic = root.optString("topic", "")
         if (topic.isEmpty()) return
 
@@ -381,6 +419,24 @@ object BybitPayloadParser {
                             priceSource = PriceSource.LAST,
                             interval = interval,
                             candle = candle
+                        )
+                    )
+                }
+            }
+            topic.startsWith("publicTrade.") -> {
+                val fallbackSymbol = topic.removePrefix("publicTrade.")
+                val dataArr = root.optJSONArray("data") ?: return
+                if (dataArr.length() == 0) return
+                val latest = dataArr.getJSONObject(dataArr.length() - 1)
+                val symbol = latest.optString("s", fallbackSymbol).ifBlank { fallbackSymbol }.uppercase()
+                val price = latest.optString("p").toDoubleOrNull() ?: return
+                val tradeTs = latest.optLong("T", serverTs)
+                if (price > 0.0) {
+                    onTrade(
+                        WsTradeUpdate(
+                            symbol = symbol,
+                            price = price,
+                            timestampMs = if (tradeTs > 0L) tradeTs else System.currentTimeMillis()
                         )
                     )
                 }
