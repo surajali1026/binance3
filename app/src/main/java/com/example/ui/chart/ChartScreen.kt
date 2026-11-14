@@ -184,6 +184,7 @@ fun ChartScreen(
                     viewModel.updateCrosshair(time, price, candle)
                 },
                 onQuickAlert = { price -> requestCreateAlert(price) },
+                onManualInteraction = viewModel::onChartManualInteraction,
                 modifier = Modifier.fillMaxSize()
             )
 
