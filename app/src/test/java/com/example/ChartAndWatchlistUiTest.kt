@@ -254,4 +254,56 @@ class ChartAndWatchlistUiTest {
         assertEquals(true, pinchCount > 0)
         assertEquals(true, lastZoomX > 1.0f)
     }
+
+    @Test
+    fun `chart coin switcher exposes all top gainers and top losers filters`() {
+        val btc = FuturesContract("BTCUSDT", "BTCUSDT", "BTC", "USDT", 2, 3, 0.1, "PERPETUAL", "TRADING")
+        val eth = FuturesContract("ETHUSDT", "ETHUSDT", "ETH", "USDT", 2, 3, 0.1, "PERPETUAL", "TRADING")
+        val sol = FuturesContract("SOLUSDT", "SOLUSDT", "SOL", "USDT", 2, 3, 0.01, "PERPETUAL", "TRADING")
+        val items = listOf(
+            com.example.domain.model.WatchlistItem(
+                btc,
+                TickerSnapshot("BTCUSDT", 92000.0, 92000.0, 92000.0, 4.5, 1_000_000.0, 93000.0, 88000.0),
+                isFavorite = true
+            ),
+            com.example.domain.model.WatchlistItem(
+                eth,
+                TickerSnapshot("ETHUSDT", 3200.0, 3200.0, 3200.0, -3.2, 800_000.0, 3350.0, 3150.0),
+                isFavorite = false
+            ),
+            com.example.domain.model.WatchlistItem(
+                sol,
+                TickerSnapshot("SOLUSDT", 210.0, 210.0, 210.0, 8.1, 600_000.0, 215.0, 190.0),
+                isFavorite = false
+            )
+        )
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                com.example.ui.chart.QuickCoinSwitcherSheet(
+                    items = items,
+                    currentSymbol = "BTCUSDT",
+                    onSelectSymbol = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("coin_switcher_filter_all").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("coin_switcher_filter_favorites").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("coin_switcher_filter_gainers").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("SOLUSDT").assertIsDisplayed()
+        composeTestRule.onNodeWithText("ETHUSDT").assertDoesNotExist()
+
+        composeTestRule.onNodeWithTag("coin_switcher_filter_losers").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("ETHUSDT").assertIsDisplayed()
+        composeTestRule.onNodeWithText("SOLUSDT").assertDoesNotExist()
+
+        composeTestRule.onNodeWithTag("coin_switcher_filter_all").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("BTCUSDT").assertIsDisplayed()
+    }
 }

@@ -17,17 +17,20 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
 import kotlin.math.min
 
@@ -463,127 +466,155 @@ class MarketRepository(
         }
 
         val cacheKey = CandleCacheKey(symbol, priceSource, timeframe.id, mode)
+        val (baseInterval, baseMs) = CandleAggregator.pickBaseInterval(timeframe, mode)
+        val lastKlineWsMillis = AtomicLong(0L)
 
-        if (mode == MarketEndpointMode.BYBIT_LINEAR) {
-            val (baseInterval, baseMs) = CandleAggregator.pickBaseInterval(timeframe, mode)
+        fun aggregateIfNeeded(cache: LinkedHashMap<Long, Candle>, baseCandle: Candle): Candle {
+            return if (CandleAggregator.isNativeSupported(timeframe, mode)) {
+                baseCandle
+            } else {
+                val bucketMs = timeframe.durationMillis
+                val bucketStart = (baseCandle.openTime / bucketMs) * bucketMs
+                val inBucket = cache.values.filter {
+                    it.openTime >= bucketStart && it.openTime < bucketStart + bucketMs
+                }
+                CandleAggregator.aggregateBucket(bucketStart, bucketMs, inBucket)
+            }
+        }
+
+        fun applyTickToBaseCache(tickPrice: Double): Candle {
+            val now = System.currentTimeMillis()
+            val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }
+            return synchronized(cache) {
+                val bucketStart = (now / baseMs) * baseMs
+                val bucketClose = bucketStart + baseMs - 1L
+                val existing = cache[bucketStart]
+                val updatedBase = if (existing != null) {
+                    existing.copy(
+                        high = max(existing.high, tickPrice),
+                        low = min(existing.low, tickPrice),
+                        close = tickPrice,
+                        isClosed = false
+                    )
+                } else {
+                    cache.values.lastOrNull()?.let { prev ->
+                        if (!prev.isClosed && prev.openTime < bucketStart) {
+                            cache[prev.openTime] = prev.copy(isClosed = true)
+                        }
+                    }
+                    Candle(
+                        openTime = bucketStart,
+                        closeTime = bucketClose,
+                        open = tickPrice,
+                        high = tickPrice,
+                        low = tickPrice,
+                        close = tickPrice,
+                        volume = 0.0,
+                        isClosed = false
+                    )
+                }
+                cache[bucketStart] = updatedBase
+                aggregateIfNeeded(cache, updatedBase)
+            }
+        }
+
+        val topics: List<String> = if (mode == MarketEndpointMode.BYBIT_LINEAR) {
             val bybitInterval = BybitPayloadParser.toBybitInterval(baseInterval)
-            val klineTopic = BinanceSocketManager.bybitKlineTopic(symbol, bybitInterval)
-            val tickerTopic = BinanceSocketManager.bybitTickerTopic(symbol)
-            val topics = listOf(klineTopic, tickerTopic)
-            socketManager.subscribe(topics)
-
-            val klineJob = launch(Dispatchers.IO) {
-                socketManager.klineUpdates.collect { update ->
-                    if (!update.stream.equals(klineTopic, ignoreCase = true)) return@collect
-                    if (priceSource == PriceSource.LAST) {
-                        val baseCandle = update.candle
-                        val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }
-                        val emittedCandle = synchronized(cache) {
-                            cache[baseCandle.openTime] = baseCandle
-                            if (CandleAggregator.isNativeSupported(timeframe, mode)) {
-                                baseCandle
-                            } else {
-                                val bucketMs = timeframe.durationMillis
-                                val bucketStart = (baseCandle.openTime / bucketMs) * bucketMs
-                                val inBucket = cache.values.filter {
-                                    it.openTime >= bucketStart && it.openTime < bucketStart + bucketMs
-                                }
-                                CandleAggregator.aggregateBucket(bucketStart, bucketMs, inBucket)
-                            }
-                        }
-                        trySend(emittedCandle)
-                    }
-                }
-            }
-
-            val tickJob = if (priceSource == PriceSource.MARK || priceSource == PriceSource.INDEX) {
-                launch(Dispatchers.IO) {
-                    socketManager.markPriceUpdates.collect { updates ->
-                        val tick = updates.firstOrNull { it.symbol.equals(symbol, ignoreCase = true) } ?: return@collect
-                        val tickPrice = if (priceSource == PriceSource.MARK) tick.markPrice else tick.indexPrice
-                        if (tickPrice == null || tickPrice <= 0.0) return@collect
-
-                        val now = System.currentTimeMillis()
-                        val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }
-                        val emitted = synchronized(cache) {
-                            val bucketMs = if (CandleAggregator.isNativeSupported(timeframe, mode)) baseMs else timeframe.durationMillis
-                            val bucketStart = (now / bucketMs) * bucketMs
-                            val bucketClose = bucketStart + bucketMs - 1L
-                            val existing = cache[bucketStart]
-                            val updatedBar = if (existing != null) {
-                                existing.copy(
-                                    high = max(existing.high, tickPrice),
-                                    low = min(existing.low, tickPrice),
-                                    close = tickPrice,
-                                    isClosed = false
-                                )
-                            } else {
-                                // Mark previous open bar as closed if transitioning to a fresh candle
-                                cache.values.lastOrNull()?.let { prev ->
-                                    if (!prev.isClosed && prev.openTime < bucketStart) {
-                                        cache[prev.openTime] = prev.copy(isClosed = true)
-                                    }
-                                }
-                                Candle(
-                                    openTime = bucketStart,
-                                    closeTime = bucketClose,
-                                    open = tickPrice,
-                                    high = tickPrice,
-                                    low = tickPrice,
-                                    close = tickPrice,
-                                    volume = 0.0,
-                                    isClosed = false
-                                )
-                            }
-                            cache[bucketStart] = updatedBar
-                            updatedBar
-                        }
-                        trySend(emitted)
-                    }
-                }
-            } else null
-
-            awaitClose {
-                klineJob.cancel()
-                tickJob?.cancel()
-                socketManager.unsubscribe(topics)
-            }
+            listOf(
+                BinanceSocketManager.bybitKlineTopic(symbol, bybitInterval),
+                BinanceSocketManager.bybitTickerTopic(symbol)
+            )
         } else {
-            val (baseInterval, _) = CandleAggregator.pickBaseInterval(timeframe, mode)
-            val targetStream = BinanceSocketManager.klineStreamName(
+            val klineStream = BinanceSocketManager.klineStreamName(
                 symbol = symbol,
                 pair = pair.ifBlank { symbol },
                 priceSource = priceSource,
                 nativeInterval = baseInterval
             )
-            socketManager.subscribe(listOf(targetStream))
+            listOf(klineStream)
+        }
+        val targetKlineTopic = topics.first()
+        socketManager.subscribe(topics)
 
-            val collectJob = launch(Dispatchers.IO) {
-                socketManager.klineUpdates.collect { update ->
-                    if (!update.stream.equals(targetStream, ignoreCase = true)) return@collect
-                    val baseCandle = update.candle
-                    val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }
-                    val emittedCandle = synchronized(cache) {
-                        cache[baseCandle.openTime] = baseCandle
-                        if (CandleAggregator.isNativeSupported(timeframe, mode)) {
-                            baseCandle
-                        } else {
-                            val bucketMs = timeframe.durationMillis
-                            val bucketStart = (baseCandle.openTime / bucketMs) * bucketMs
-                            val inBucket = cache.values.filter {
-                                it.openTime >= bucketStart && it.openTime < bucketStart + bucketMs
-                            }
-                            CandleAggregator.aggregateBucket(bucketStart, bucketMs, inBucket)
-                        }
+        val klineJob = launch(Dispatchers.IO) {
+            socketManager.klineUpdates.collect { update ->
+                if (!update.stream.equals(targetKlineTopic, ignoreCase = true)) return@collect
+                if (mode == MarketEndpointMode.BYBIT_LINEAR && priceSource != PriceSource.LAST) return@collect
+                lastKlineWsMillis.set(System.currentTimeMillis())
+                val baseCandle = update.candle
+                val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }
+                val emittedCandle = synchronized(cache) {
+                    cache[baseCandle.openTime] = baseCandle
+                    aggregateIfNeeded(cache, baseCandle)
+                }
+                trySend(emittedCandle)
+            }
+        }
+
+        val tickerCandleJob = launch(Dispatchers.IO) {
+            if (priceSource == PriceSource.LAST) {
+                socketManager.tickerUpdates.collect { updates ->
+                    val tick = updates.firstOrNull { it.symbol.equals(symbol, ignoreCase = true) } ?: return@collect
+                    val price = tick.lastPrice ?: return@collect
+                    if (price <= 0.0) return@collect
+                    // Always update live bar from ticker if kline stream hasn't updated in the last 1.2s
+                    // or if we've crossed into a new candle interval boundary.
+                    val now = System.currentTimeMillis()
+                    val msSinceKline = now - lastKlineWsMillis.get()
+                    val cache = baseCandleCache[cacheKey]
+                    val lastBaseCloseTime = cache?.let { synchronized(it) { it.values.lastOrNull()?.closeTime } } ?: 0L
+                    if (msSinceKline > 1200L || now > lastBaseCloseTime) {
+                        trySend(applyTickToBaseCache(price))
                     }
-                    trySend(emittedCandle)
+                }
+            } else {
+                socketManager.markPriceUpdates.collect { updates ->
+                    val tick = updates.firstOrNull { it.symbol.equals(symbol, ignoreCase = true) } ?: return@collect
+                    val price = if (priceSource == PriceSource.MARK) tick.markPrice else tick.indexPrice
+                    if (price == null || price <= 0.0) return@collect
+                    if (mode == MarketEndpointMode.BYBIT_LINEAR ||
+                        System.currentTimeMillis() - lastKlineWsMillis.get() > 1500L
+                    ) {
+                        trySend(applyTickToBaseCache(price))
+                    }
                 }
             }
+        }
 
-            awaitClose {
-                collectJob.cancel()
-                socketManager.unsubscribe(listOf(targetStream))
+        val restSyncFallbackJob = launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(4000L)
+                val staleWs = System.currentTimeMillis() - lastKlineWsMillis.get() > 5000L
+                if (staleWs || socketManager.connectionState.value != SocketConnectionState.CONNECTED) {
+                    runCatching {
+                        val (parsed, resolvedMode) = fetchKlinesWithFallback(
+                            symbol = symbol,
+                            pair = pair,
+                            priceSource = priceSource,
+                            timeframe = timeframe,
+                            endTime = null
+                        )
+                        if (parsed.isNotEmpty() && resolvedMode == mode) {
+                            val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }
+                            val latest = synchronized(cache) {
+                                parsed.takeLast(5).forEach { c -> cache[c.openTime] = c }
+                                val tail = cache.values.lastOrNull()
+                                tail?.let { aggregateIfNeeded(cache, it) }
+                            }
+                            if (latest != null) {
+                                trySend(latest)
+                            }
+                        }
+                    }
+                }
             }
+        }
+
+        awaitClose {
+            klineJob.cancel()
+            tickerCandleJob.cancel()
+            restSyncFallbackJob.cancel()
+            socketManager.unsubscribe(topics)
         }
     }
 

@@ -115,10 +115,13 @@ fun ChartCanvas(
     val precision = state.contract?.pricePrecision ?: 2
     val bullColor = Color(state.preferences.bullColorHex)
     val bearColor = Color(state.preferences.bearColorHex)
-    val textMeasurer = rememberTextMeasurer()
+    val textMeasurer = rememberTextMeasurer(cacheSize = 96)
     val density = LocalDensity.current
     val haptic = LocalHapticFeedback.current
     val gestureScope = rememberCoroutineScope()
+    val alertDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f) }
+    val priceDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f) }
+    val quickDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f) }
 
     var plotWidthPx by remember { mutableFloatStateOf(900f) }
     var plotHeightPx by remember { mutableFloatStateOf(600f) }
@@ -144,6 +147,7 @@ fun ChartCanvas(
             viewport = state.viewport
         )
     }
+    val currentMapper by rememberUpdatedState(mapper)
 
     val priceAxisWidth = 72.dp
     val timeAxisHeight = 26.dp
@@ -199,13 +203,7 @@ fun ChartCanvas(
 
                             val localState = currentState
                             val localCandles = currentCandles
-                            val localMapper = ChartCoordinateMapper(
-                                candles = localCandles,
-                                timeframeDurationMs = localState.activeTimeframe.durationMillis,
-                                plotWidthPx = plotWidthPx,
-                                plotHeightPx = plotHeightPx,
-                                viewport = localState.viewport
-                            )
+                            val localMapper = currentMapper
 
                             val selectedDrawing = localState.drawings.firstOrNull {
                                 it.id == localState.selectedDrawingId && !it.isLocked
@@ -291,13 +289,7 @@ fun ChartCanvas(
                                         }
 
                                         if (isCrosshairDrag) {
-                                            val liveMapper = ChartCoordinateMapper(
-                                                candles = currentCandles,
-                                                timeframeDurationMs = currentState.activeTimeframe.durationMillis,
-                                                plotWidthPx = plotWidthPx,
-                                                plotHeightPx = plotHeightPx,
-                                                viewport = currentState.viewport
-                                            )
+                                            val liveMapper = currentMapper
                                             val pos = change.position
                                             val time = liveMapper.xToTime(pos.x)
                                             val price = liveMapper.yToPrice(pos.y)
@@ -305,13 +297,7 @@ fun ChartCanvas(
                                             onCrosshairMove(time, price, currentCandles.getOrNull(idx))
                                             change.consume()
                                         } else if (totalMove > touchSlop) {
-                                            val liveMapper = ChartCoordinateMapper(
-                                                candles = currentCandles,
-                                                timeframeDurationMs = currentState.activeTimeframe.durationMillis,
-                                                plotWidthPx = plotWidthPx,
-                                                plotHeightPx = plotHeightPx,
-                                                viewport = currentState.viewport
-                                            )
+                                            val liveMapper = currentMapper
                                             when {
                                                 dragDrawingHandle != null -> {
                                                     val pt = liveMapper.screenToChartPoint(change.position)
@@ -381,13 +367,7 @@ fun ChartCanvas(
                                     }
                                 }
                             } else if (!longPressTriggered && !isMultiTouch && totalMove <= touchSlop) {
-                                val tapMapper = ChartCoordinateMapper(
-                                    candles = currentCandles,
-                                    timeframeDurationMs = currentState.activeTimeframe.durationMillis,
-                                    plotWidthPx = plotWidthPx,
-                                    plotHeightPx = plotHeightPx,
-                                    viewport = currentState.viewport
-                                )
+                                val tapMapper = currentMapper
                                 val pt = tapMapper.screenToChartPoint(downPos)
                                 val hitDrawing = tapMapper.hitTestDrawing(downPos, currentState.drawings, hitThresholdPx)
                                 val hitAlert = tapMapper.hitTestAlert(
@@ -507,7 +487,6 @@ fun ChartCanvas(
                     }
 
                     // 4. Dotted Alert Lines (no unnecessary name tags on chart)
-                    val dottedEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f)
                     state.alertsForSymbol.filter { it.isActive }.forEach { alert ->
                         val ay = mapper.priceToY(alert.targetPrice)
                         if (ay in -10f..(height + 10f)) {
@@ -517,7 +496,7 @@ fun ChartCanvas(
                                 start = Offset(0f, ay),
                                 end = Offset(width, ay),
                                 strokeWidth = if (isSelected) 3f else 2f,
-                                pathEffect = dottedEffect
+                                pathEffect = alertDashEffect
                             )
                             if (isSelected) {
                                 drawCircle(
@@ -594,7 +573,7 @@ fun ChartCanvas(
                             start = Offset(0f, py),
                             end = Offset(width, py),
                             strokeWidth = 1.6f,
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
+                            pathEffect = priceDashEffect
                         )
                     }
 
@@ -607,7 +586,7 @@ fun ChartCanvas(
                                 start = Offset(0f, qy),
                                 end = Offset(width, qy),
                                 strokeWidth = 1.25f,
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+                                pathEffect = quickDashEffect
                             )
                         }
                     }
@@ -616,20 +595,19 @@ fun ChartCanvas(
                     if (state.crosshair.isActive) {
                         val cx = mapper.timeToX(state.crosshair.timeMillis)
                         val cy = mapper.priceToY(state.crosshair.price)
-                        val crossDash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
                         drawLine(
                             color = TextMuted.copy(alpha = 0.75f),
                             start = Offset(cx, 0f),
                             end = Offset(cx, height),
                             strokeWidth = 1.4f,
-                            pathEffect = crossDash
+                            pathEffect = priceDashEffect
                         )
                         drawLine(
                             color = TextMuted.copy(alpha = 0.75f),
                             start = Offset(0f, cy),
                             end = Offset(width, cy),
                             strokeWidth = 1.4f,
-                            pathEffect = crossDash
+                            pathEffect = priceDashEffect
                         )
                     }
                 }

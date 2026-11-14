@@ -55,7 +55,6 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.model.ChartDrawing
-import com.example.domain.model.ChartPoint
 import com.example.domain.model.DrawingTool
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.BearishRed
@@ -174,18 +173,23 @@ fun ChartScreen(
                 .weight(1f)
                 .fillMaxWidth()
         ) {
-            LightweightChartView(
+            ChartCanvas(
                 state = state,
-                onChartTap = { time, price, index ->
-                    viewModel.handleChartTap(ChartPoint(time, price), null, null, index)
-                },
-                onCrosshairMove = { time, price ->
-                    val candle = state.displayedCandles.minByOrNull { kotlin.math.abs(it.openTime - time) }
-                    viewModel.updateCrosshair(time, price, candle)
-                },
-                onQuickAlert = { price -> requestCreateAlert(price) },
-                onManualInteraction = viewModel::onChartManualInteraction,
-                modifier = Modifier.fillMaxSize()
+                onPlotWidthChanged = viewModel::updatePlotWidth,
+                onPan = viewModel::panChart,
+                onPinchZoom = viewModel::pinchZoom,
+                onScalePriceAxis = viewModel::scalePriceAxis,
+                onResetPriceAutoFit = viewModel::resetPriceAutoFitOnly,
+                onPlotDoubleTap = viewModel::onPlotDoubleTap,
+                onDismissCrosshair = viewModel::clearCrosshair,
+                onScaleTimeAxis = viewModel::scaleTimeAxis,
+                onCrosshairMove = viewModel::updateCrosshair,
+                onChartTap = viewModel::handleChartTap,
+                onMoveDrawingAnchor = viewModel::moveDrawingAnchor,
+                onMoveWholeDrawing = viewModel::moveWholeDrawing,
+                onMoveAlertPrice = viewModel::moveAlertPrice,
+                onPriceAxisTap = { price -> viewModel.setAxisQuickAlertPrice(price) },
+                onQuickAlertPlusClick = { price -> requestCreateAlert(price) }
             )
 
             // Side-mounted Floating Drawing Toolbar

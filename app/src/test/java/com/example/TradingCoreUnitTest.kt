@@ -325,12 +325,21 @@ class TradingCoreUnitTest {
         assertEquals(anchorBefore, anchorAfter, 1e-6)
         assertFalse(vpAfterPinch.isAutoFit)
 
-        // 3. Double tap first restores autoFit, then second double tap snaps rightOffsetBars to 8f
-        vm.panChart(deltaXPx = 120f, deltaYPx = 0f, plotHeightPx = plotHeight)
-        val pannedOffset = vm.viewportState.value.rightOffsetBars
+        // 3. Verify horizontal pan direction & double-tap reset
+        val offsetBeforeDrag = vm.viewportState.value.rightOffsetBars
+        val spacing = vm.viewportState.value.barSpacingPx
+        // Dragging left (deltaXPx < 0) increases rightOffsetBars so candles shift left on screen
+        vm.panChart(deltaXPx = -90f, deltaYPx = 0f, plotHeightPx = plotHeight)
+        val offsetAfterLeftDrag = vm.viewportState.value.rightOffsetBars
+        assertEquals(offsetBeforeDrag + (90f / spacing), offsetAfterLeftDrag, 0.001f)
+        // Dragging right (deltaXPx > 0) decreases rightOffsetBars so candles shift right on screen
+        vm.panChart(deltaXPx = 90f, deltaYPx = 0f, plotHeightPx = plotHeight)
+        val offsetAfterRightDrag = vm.viewportState.value.rightOffsetBars
+        assertEquals(offsetBeforeDrag, offsetAfterRightDrag, 0.001f)
+
         vm.onPlotDoubleTap()
         assertTrue(vm.viewportState.value.isAutoFit)
-        assertEquals(pannedOffset, vm.viewportState.value.rightOffsetBars, 0.001f)
+        assertEquals(offsetAfterRightDrag, vm.viewportState.value.rightOffsetBars, 0.001f)
 
         vm.onPlotDoubleTap()
         assertTrue(vm.viewportState.value.isAutoFit)

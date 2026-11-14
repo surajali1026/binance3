@@ -65,6 +65,7 @@ import com.example.domain.model.CustomTimeUnit
 import com.example.domain.model.DrawingType
 import com.example.domain.model.LineStyle
 import com.example.domain.model.Timeframe
+import com.example.domain.model.WatchlistFilter
 import com.example.domain.model.WatchlistItem
 import com.example.ui.theme.AlertAmber
 import com.example.ui.theme.AmberGold
@@ -91,11 +92,22 @@ fun QuickCoinSwitcherSheet(
     onDismiss: () -> Unit
 ) {
     var query by remember { mutableStateOf("") }
-    val filtered = remember(items, query) {
+    var activeFilter by remember { mutableStateOf(WatchlistFilter.ALL) }
+    val filtered = remember(items, query, activeFilter) {
         val q = query.trim()
-        if (q.isEmpty()) items else items.filter {
+        val searched = if (q.isEmpty()) items else items.filter {
             it.contract.symbol.contains(q, ignoreCase = true) ||
                 it.contract.baseAsset.contains(q, ignoreCase = true)
+        }
+        when (activeFilter) {
+            WatchlistFilter.ALL -> searched
+            WatchlistFilter.FAVORITES -> searched.filter { it.isFavorite }
+            WatchlistFilter.GAINERS -> searched
+                .filter { (it.ticker?.priceChangePercent24h ?: 0.0) > 0.0 }
+                .sortedByDescending { it.ticker?.priceChangePercent24h ?: 0.0 }
+            WatchlistFilter.LOSERS -> searched
+                .filter { (it.ticker?.priceChangePercent24h ?: 0.0) < 0.0 }
+                .sortedBy { it.ticker?.priceChangePercent24h ?: 0.0 }
         }
     }
 
@@ -121,14 +133,71 @@ fun QuickCoinSwitcherSheet(
                 onValueChange = { query = it },
                 placeholder = { Text("Search symbol...") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 380.dp)
+                    .testTag("coin_switcher_search_input")
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                val filterChips = listOf(
+                    WatchlistFilter.ALL to "All",
+                    WatchlistFilter.FAVORITES to "Favorites",
+                    WatchlistFilter.GAINERS to "Top Gainers",
+                    WatchlistFilter.LOSERS to "Top Losers"
+                )
+                filterChips.forEach { (filter, label) ->
+                    val selected = filter == activeFilter
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (selected) AmberGold.copy(alpha = 0.16f) else ToolbarSurface)
+                            .border(
+                                0.75.dp,
+                                if (selected) AmberGold else BorderSubtle,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickable { activeFilter = filter }
+                            .padding(horizontal = 12.dp, vertical = 7.dp)
+                            .testTag("coin_switcher_filter_${filter.name.lowercase()}")
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (selected) AmberGold else TextMuted
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            if (filtered.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (activeFilter == WatchlistFilter.FAVORITES) {
+                            "No starred contracts yet"
+                        } else {
+                            "No matching contracts"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextMuted
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                ) {
                 items(filtered, key = { it.contract.symbol }) { item ->
                     val pct = item.ticker?.priceChangePercent24h ?: 0.0
                     val isUp = pct >= 0.0
@@ -175,6 +244,7 @@ fun QuickCoinSwitcherSheet(
                         )
                     }
                 }
+            }
             }
         }
     }

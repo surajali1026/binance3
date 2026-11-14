@@ -65,13 +65,12 @@ class BinanceSocketManager(
             if (streamBaseUrl == newUrl) return
             streamBaseUrl = newUrl
             reconnectAttempt = 0
+            reconnectJob?.cancel()
             heartbeatJob?.cancel()
-            if (webSocket != null) {
-                webSocket?.cancel()
-                webSocket = null
-                if (subscriptionCounts.isNotEmpty() && !isIntentionallyClosed) {
-                    connectInternal()
-                }
+            webSocket?.cancel()
+            webSocket = null
+            if (subscriptionCounts.isNotEmpty() && !isIntentionallyClosed) {
+                connectInternal()
             }
         }
     }

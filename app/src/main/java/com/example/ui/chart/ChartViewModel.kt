@@ -28,6 +28,7 @@ import com.example.domain.model.PriceSource
 import com.example.domain.model.TickerSnapshot
 import com.example.domain.model.Timeframe
 import com.example.domain.model.WatchlistItem
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -95,11 +97,11 @@ data class ChartUiState(
         }
 
     val currentPrice: Double?
-        get() = when (priceSource) {
+        get() = displayedCandles.lastOrNull()?.close ?: when (priceSource) {
             PriceSource.LAST -> ticker?.lastPrice
             PriceSource.MARK -> ticker?.markPrice
             PriceSource.INDEX -> ticker?.indexPrice
-        }?.takeIf { it.isFinite() && it > 0.0 } ?: displayedCandles.lastOrNull()?.close
+        }?.takeIf { it.isFinite() && it > 0.0 }
 }
 
 class ChartViewModel(
@@ -226,6 +228,23 @@ class ChartViewModel(
         )
     }
 
+    private val switcherItemsFlow: StateFlow<List<WatchlistItem>> = combine(
+        marketRepository.contracts,
+        marketRepository.tickers,
+        chartStateRepository.favoriteSymbols
+    ) { contracts, tickers, favorites ->
+        contracts.map { c ->
+            WatchlistItem(c, tickers[c.symbol], favorites.contains(c.symbol))
+        }.sortedWith(
+            compareByDescending<WatchlistItem> { it.isFavorite }
+                .thenByDescending { it.ticker?.quoteVolume24h ?: 0.0 }
+        )
+    }.flowOn(Dispatchers.Default).stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     val uiState: StateFlow<ChartUiState> = combine(
         coreMarketFlow,
         interactionFlow,
@@ -236,7 +255,8 @@ class ChartViewModel(
         _countdownMillis,
         chartStateRepository.activeAlerts,
         chartStateRepository.alertHistory,
-        chartStateRepository.preferences
+        chartStateRepository.preferences,
+        switcherItemsFlow
     ) { arr ->
         val market = arr[0] as CoreMarketSlice
         val ui = arr[1] as InteractionSlice
@@ -250,6 +270,8 @@ class ChartViewModel(
         @Suppress("UNCHECKED_CAST")
         val alertHistory = arr[8] as List<AlertHistoryEntry>
         val prefs = arr[9] as ChartPreferences
+        @Suppress("UNCHECKED_CAST")
+        val switcherItems = arr[10] as List<WatchlistItem>
 
         val activeTf = market.allTfs.firstOrNull { it.id == market.tfId }
             ?: market.allTfs.firstOrNull { it.id == "15m" }
@@ -257,9 +279,6 @@ class ChartViewModel(
         val favTfs = market.allTfs.filter { it.isFavorite }
         val contract = market.contracts.firstOrNull { it.symbol.equals(market.symbol, ignoreCase = true) }
         val ticker = market.tickers[market.symbol]
-        val switcherItems = market.contracts.map { c ->
-            WatchlistItem(c, market.tickers[c.symbol], market.favorites.contains(c.symbol))
-        }.sortedWith(compareByDescending<WatchlistItem> { it.isFavorite }.thenByDescending { it.ticker?.quoteVolume24h ?: 0.0 })
 
         ChartUiState(
             symbol = market.symbol,
@@ -453,7 +472,8 @@ class ChartViewModel(
                 existing.dropLast(1) + update
             }
             update.openTime > last.openTime -> {
-                existing + update
+                val closedPrev = if (!last.isClosed) last.copy(isClosed = true) else last
+                existing.dropLast(1) + closedPrev + update
             }
             else -> {
                 val idx = existing.indexOfLast { it.openTime == update.openTime }
@@ -543,7 +563,7 @@ class ChartViewModel(
         val minOffset = -(candles.size.toFloat() - 2f).coerceAtLeast(0f)
 
         _viewport.update { vp ->
-            val newRightOffset = (vp.rightOffsetBars + deltaBars).coerceIn(minOffset, maxOffset)
+            val newRightOffset = (vp.rightOffsetBars - deltaBars).coerceIn(minOffset, maxOffset)
             var newMin = vp.priceMin
             var newMax = vp.priceMax
             var nextAutoFit = vp.isAutoFit
@@ -555,12 +575,13 @@ class ChartViewModel(
                 newMin += deltaPrice
                 newMax += deltaPrice
             }
-            vp.copy(
+            val updated = vp.copy(
                 rightOffsetBars = newRightOffset,
                 priceMin = newMin,
                 priceMax = newMax,
                 isAutoFit = nextAutoFit
             )
+            applyAutoFitToViewport(updated, candles)
         }
 
         val visibleLeftIdx = floor(
@@ -568,10 +589,6 @@ class ChartViewModel(
         ).toInt()
         if (visibleLeftIdx <= 20) {
             paginateOlderHistoryIfNeeded()
-        }
-
-        if (_viewport.value.isAutoFit) {
-            autoFitIfNeeded(candles)
         }
         persistChartState()
     }
@@ -613,16 +630,14 @@ class ChartViewModel(
                     }
                 }
             }
-            vp.copy(
+            val updated = vp.copy(
                 barSpacingPx = newSpacing,
                 rightOffsetBars = adjustedOffset,
                 priceMin = newMin,
                 priceMax = newMax,
                 isAutoFit = nextAutoFit
             )
-        }
-        if (_viewport.value.isAutoFit) {
-            autoFitIfNeeded(candles)
+            applyAutoFitToViewport(updated, candles)
         }
         persistChartState()
     }
@@ -647,23 +662,24 @@ class ChartViewModel(
         _viewport.update { vp ->
             val factor = exp(deltaXDp * 0.0085).toFloat().coerceIn(0.5f, 2.0f)
             val newSpacing = (vp.barSpacingPx * factor).coerceIn(4f, 110f)
-            vp.copy(barSpacingPx = newSpacing)
-        }
-        if (_viewport.value.isAutoFit) {
-            autoFitIfNeeded(candles)
+            applyAutoFitToViewport(vp.copy(barSpacingPx = newSpacing), candles)
         }
         persistChartState()
     }
 
     fun triggerAutoFit() {
-        _viewport.update { it.copy(isAutoFit = true, rightOffsetBars = 8f) }
-        autoFitIfNeeded(uiState.value.displayedCandles, force = true)
+        val candles = uiState.value.displayedCandles
+        _viewport.update { vp ->
+            applyAutoFitToViewport(vp.copy(isAutoFit = true, rightOffsetBars = 8f), candles, force = true)
+        }
         persistChartState()
     }
 
     fun resetPriceAutoFitOnly() {
-        _viewport.update { it.copy(isAutoFit = true) }
-        autoFitIfNeeded(uiState.value.displayedCandles, force = true)
+        val candles = uiState.value.displayedCandles
+        _viewport.update { vp ->
+            applyAutoFitToViewport(vp.copy(isAutoFit = true), candles, force = true)
+        }
     }
 
     fun onChartManualInteraction() {
@@ -681,10 +697,13 @@ class ChartViewModel(
         }
     }
 
-    private fun autoFitIfNeeded(candles: List<Candle>, force: Boolean = false) {
-        if (candles.isEmpty()) return
-        val vp = _viewport.value
-        if (!force && !vp.isAutoFit) return
+    private fun applyAutoFitToViewport(
+        vp: ChartViewportState,
+        candles: List<Candle>,
+        force: Boolean = false
+    ): ChartViewportState {
+        if (candles.isEmpty()) return vp
+        if (!force && !vp.isAutoFit) return vp
         val spacing = vp.barSpacingPx.coerceAtLeast(4f)
         val total = candles.size
         val startIdx = floor((total - 1) + vp.rightOffsetBars - (lastPlotWidthPx / spacing)).toInt()
@@ -693,7 +712,12 @@ class ChartViewModel(
             .coerceIn(0, candles.lastIndex)
         val range = if (startIdx <= endIdx) startIdx..endIdx else 0..candles.lastIndex
         val (minP, maxP) = ChartCoordinateMapper.computeAutoFitBounds(candles, range)
-        _viewport.update { it.copy(priceMin = minP, priceMax = maxP) }
+        return vp.copy(priceMin = minP, priceMax = maxP)
+    }
+
+    private fun autoFitIfNeeded(candles: List<Candle>, force: Boolean = false) {
+        if (candles.isEmpty()) return
+        _viewport.update { vp -> applyAutoFitToViewport(vp, candles, force = force) }
     }
 
     // Crosshair & Quick Alert "+"
