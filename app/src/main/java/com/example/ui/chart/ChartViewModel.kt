@@ -67,6 +67,8 @@ sealed interface ChartWebUpdate {
     ) : ChartWebUpdate
 
     data object ResetScroll : ChartWebUpdate
+
+    data object ResetPriceScale : ChartWebUpdate
 }
 
 data class CrosshairState(
@@ -789,6 +791,7 @@ class ChartViewModel(
         _viewport.update { vp ->
             applyAutoFitToViewport(vp.copy(isAutoFit = true), candles, force = true)
         }
+        _webChartUpdates.tryEmit(ChartWebUpdate.ResetPriceScale)
     }
 
     fun onChartManualInteraction() {

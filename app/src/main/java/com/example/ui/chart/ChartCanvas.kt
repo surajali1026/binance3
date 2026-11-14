@@ -432,10 +432,32 @@ fun ChartCanvas(
                         }
                     }
 
-                    // 2. Candlesticks
+                    // 2. Volume Histogram (subtle 14% bottom band) & Candlesticks
                     if (!visibleRange.isEmpty()) {
-                        val candleBodyWidth = (state.viewport.barSpacingPx * 0.68f).coerceIn(1.5f, 46f)
+                        val candleBodyWidth = (state.viewport.barSpacingPx * 0.68f).coerceIn(2f, 46f)
                         val wickStroke = (state.viewport.barSpacingPx * 0.1f).coerceIn(1.2f, 2.8f)
+
+                        var maxVol = 0.0
+                        for (idx in visibleRange) {
+                            val v = candles[idx].volume
+                            if (v > maxVol) maxVol = v
+                        }
+                        if (maxVol > 0.0) {
+                            val volBandHeight = height * 0.15f
+                            for (idx in visibleRange) {
+                                val c = candles[idx]
+                                val cx = mapper.indexToX(idx.toFloat())
+                                val vRatio = (c.volume / maxVol).toFloat().coerceIn(0f, 1f)
+                                val barH = (vRatio * volBandHeight).coerceAtLeast(1.5f)
+                                val isBull = c.close >= c.open
+                                val vColor = (if (isBull) bullColor else bearColor).copy(alpha = 0.28f)
+                                drawRect(
+                                    color = vColor,
+                                    topLeft = Offset(cx - candleBodyWidth / 2f, height - barH),
+                                    size = Size(candleBodyWidth, barH)
+                                )
+                            }
+                        }
 
                         for (idx in visibleRange) {
                             val c = candles[idx]
@@ -835,6 +857,14 @@ fun ChartCanvas(
                         detectHorizontalDragGestures { _, dragAmount ->
                             onScaleTimeAxis(dragAmount / density.density)
                         }
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onPlotDoubleTap()
+                            }
+                        )
                     }
                     .testTag("chart_time_axis")
             ) {

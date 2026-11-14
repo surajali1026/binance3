@@ -365,7 +365,8 @@ fun ChartTimeframeStrip(
 fun CrosshairOhlcvBar(
     state: ChartUiState,
     onCreateAlertAtCrosshair: (Double) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val candle = state.crosshair.candle ?: return
     val precision = state.contract?.pricePrecision ?: 2
@@ -374,7 +375,7 @@ fun CrosshairOhlcvBar(
     val valueColor = if (isBull) BullishGreen else BearishRed
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 4.dp)
             .clip(RoundedCornerShape(8.dp))

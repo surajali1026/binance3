@@ -293,8 +293,9 @@ class ChartCoordinateMapper(
             }
             if (low == Double.MAX_VALUE || high == -Double.MAX_VALUE) return 0.0 to 100.0
             val span = (high - low).takeIf { it > 0.0 } ?: (high * 0.02).coerceAtLeast(1e-6)
-            val pad = span * 0.12
-            return (low - pad) to (high + pad)
+            val topPad = span * 0.10
+            val bottomPad = span * 0.22
+            return (low - bottomPad) to (high + topPad)
         }
     }
 }

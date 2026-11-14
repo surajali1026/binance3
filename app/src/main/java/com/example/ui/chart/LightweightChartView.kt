@@ -1,15 +1,22 @@
 package com.example.ui.chart
 
 import android.annotation.SuppressLint
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,6 +34,7 @@ import com.example.domain.model.DrawingTool
 import com.example.domain.model.DrawingType
 import com.example.domain.model.LineStyle
 import com.example.domain.model.PriceAlert
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharedFlow
 import org.json.JSONArray
 import org.json.JSONObject
@@ -37,9 +45,13 @@ import kotlin.math.min
 private class ChartJavascriptBridge(
     var onTap: (Long, Double) -> Unit,
     var onCrosshair: (Long, Double) -> Unit,
+    var onDismissCrosshair: () -> Unit,
+    var onDoubleTapReset: () -> Unit,
+    var onPriceAxisTap: (Double) -> Unit,
     var onQuickAlert: (Double) -> Unit,
     var onManualInteraction: () -> Unit,
     var onChartReady: () -> Unit,
+    var onLibraryLoadFailed: (String) -> Unit,
     var onErrorReport: (String) -> Unit
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -54,6 +66,21 @@ private class ChartJavascriptBridge(
     fun onCrosshair(timeSeconds: Double, price: Double) {
         val time = (timeSeconds * 1000.0).toLong()
         mainHandler.post { onCrosshair(time, price) }
+    }
+
+    @JavascriptInterface
+    fun onDismissCrosshair() {
+        mainHandler.post { onDismissCrosshair() }
+    }
+
+    @JavascriptInterface
+    fun onDoubleTapReset() {
+        mainHandler.post { onDoubleTapReset() }
+    }
+
+    @JavascriptInterface
+    fun onPriceAxisTap(price: Double) {
+        mainHandler.post { onPriceAxisTap(price) }
     }
 
     @JavascriptInterface
@@ -72,6 +99,11 @@ private class ChartJavascriptBridge(
     }
 
     @JavascriptInterface
+    fun onLibraryFailed(message: String) {
+        mainHandler.post { onLibraryLoadFailed(message) }
+    }
+
+    @JavascriptInterface
     fun onError(message: String) {
         mainHandler.post { onErrorReport(message) }
     }
@@ -79,7 +111,30 @@ private class ChartJavascriptBridge(
 
 private class ChartSyncTracker {
     var syncedSeriesKey: String? = null
+    var syncedFirstTime: Long = -1L
+    var syncedCount: Int = 0
     var lastOverlayJson: String = ""
+}
+
+private fun isAndroidEmulator(): Boolean {
+    return (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic")) ||
+        Build.FINGERPRINT.startsWith("generic") ||
+        Build.FINGERPRINT.startsWith("unknown") ||
+        Build.FINGERPRINT.contains("sdk_gphone", ignoreCase = true) ||
+        Build.FINGERPRINT.contains("cf_x86", ignoreCase = true) ||
+        Build.HARDWARE.contains("goldfish", ignoreCase = true) ||
+        Build.HARDWARE.contains("ranchu", ignoreCase = true) ||
+        Build.HARDWARE.contains("cutf", ignoreCase = true) ||
+        Build.HARDWARE.contains("vsoc", ignoreCase = true) ||
+        Build.MODEL.contains("google_sdk", ignoreCase = true) ||
+        Build.MODEL.contains("Emulator", ignoreCase = true) ||
+        Build.MODEL.contains("Android SDK built for", ignoreCase = true) ||
+        Build.MODEL.contains("Cuttlefish", ignoreCase = true) ||
+        Build.MANUFACTURER.contains("Genymotion", ignoreCase = true) ||
+        Build.PRODUCT.contains("sdk", ignoreCase = true) ||
+        Build.PRODUCT.contains("emulator", ignoreCase = true) ||
+        Build.PRODUCT.contains("simulator", ignoreCase = true) ||
+        Build.PRODUCT.contains("vsoc", ignoreCase = true)
 }
 
 private fun Candle.toJsonObject(): JSONObject = JSONObject().apply {
@@ -156,28 +211,40 @@ fun LightweightChartView(
     buildFullHistory: () -> ChartWebUpdate.FullHistory?,
     onChartTap: (ChartPoint, ChartDrawing?, PriceAlert?, Int) -> Unit,
     onCrosshairMove: (Long, Double, Candle?) -> Unit,
+    onDismissCrosshair: () -> Unit = {},
+    onDoubleTapReset: () -> Unit = {},
+    onPriceAxisTap: (Double) -> Unit = {},
     onQuickAlert: (Double) -> Unit,
     onManualInteraction: () -> Unit,
+    fallbackCanvas: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val latestState by rememberUpdatedState(state)
     val latestOnTap by rememberUpdatedState(onChartTap)
     val latestOnCrosshair by rememberUpdatedState(onCrosshairMove)
+    val latestOnDismissCrosshair by rememberUpdatedState(onDismissCrosshair)
+    val latestOnDoubleTapReset by rememberUpdatedState(onDoubleTapReset)
+    val latestOnPriceAxisTap by rememberUpdatedState(onPriceAxisTap)
     val latestOnQuickAlert by rememberUpdatedState(onQuickAlert)
     val latestOnManualInteraction by rememberUpdatedState(onManualInteraction)
     val latestBuildFullHistory by rememberUpdatedState(buildFullHistory)
 
     var webView by remember { mutableStateOf<WebView?>(null) }
     var chartReady by remember { mutableStateOf(false) }
+    var useFallbackCanvas by remember { mutableStateOf(false) }
     val tracker = remember { ChartSyncTracker() }
 
     val bridge = remember {
         ChartJavascriptBridge(
             onTap = { _, _ -> },
             onCrosshair = { _, _ -> },
+            onDismissCrosshair = { },
+            onDoubleTapReset = { },
+            onPriceAxisTap = { },
             onQuickAlert = { },
             onManualInteraction = { },
             onChartReady = { },
+            onLibraryLoadFailed = { },
             onErrorReport = { }
         )
     }
@@ -197,9 +264,24 @@ fun LightweightChartView(
         val candle = candles.getOrNull(findNearestCandleIndex(candles, timeMillis))
         latestOnCrosshair(timeMillis, price, candle)
     }
+    bridge.onDismissCrosshair = { latestOnDismissCrosshair() }
+    bridge.onDoubleTapReset = { latestOnDoubleTapReset() }
+    bridge.onPriceAxisTap = { price -> latestOnPriceAxisTap(price) }
     bridge.onQuickAlert = { price -> latestOnQuickAlert(price) }
     bridge.onManualInteraction = { latestOnManualInteraction() }
-    bridge.onChartReady = { chartReady = true }
+    bridge.onChartReady = {
+        useFallbackCanvas = false
+        chartReady = true
+    }
+    bridge.onLibraryLoadFailed = { msg ->
+        Log.w("LightweightChartView", "CDN load failed, switching to ChartCanvas fallback: $msg")
+        if (fallbackCanvas != null) {
+            useFallbackCanvas = true
+        }
+    }
+    bridge.onErrorReport = { msg ->
+        Log.e("LightweightChartView", "Chart JS error: $msg")
+    }
 
     val overlayJson = remember(
         state.alertsForSymbol,
@@ -303,32 +385,56 @@ fun LightweightChartView(
             }
         }.toString()
         tracker.syncedSeriesKey = update.seriesKey
+        tracker.syncedFirstTime = update.candles.first().openTime
+        tracker.syncedCount = update.candles.size
         view.evaluateJavascript(
             "window.setMarketData && window.setMarketData(${JSONObject.quote(payload)})",
             null
         )
     }
 
-    // Seed initial history once when WebView is ready (if history loaded before or right as WebView mounted)
-    LaunchedEffect(chartReady) {
+    val currentCandles = state.displayedCandles
+    val currentSeriesKey = "${state.symbol}_${state.activeTimeframe.id}_${state.priceSource.name}"
+    val currentFirstTime = currentCandles.firstOrNull()?.openTime ?: -1L
+    val currentCount = currentCandles.size
+
+    // Guarantee initial history (and symbol/tf/pagination/replay changes) always reach WebView
+    // even if SharedFlow emitted before chartReady flipped, while ignoring live 0/+1 bar ticks!
+    LaunchedEffect(chartReady, useFallbackCanvas, currentSeriesKey, currentFirstTime, currentCount) {
+        if (useFallbackCanvas || !chartReady || currentCandles.isEmpty()) return@LaunchedEffect
         val view = webView ?: return@LaunchedEffect
-        if (!chartReady) return@LaunchedEffect
-        if (tracker.syncedSeriesKey == null) {
-            latestBuildFullHistory()?.let { initial ->
-                pushFullHistory(view, initial, includeOverlay = true)
-            }
+        val needsFull =
+            tracker.syncedSeriesKey != currentSeriesKey ||
+                tracker.syncedFirstTime != currentFirstTime ||
+                currentCount < tracker.syncedCount ||
+                currentCount > tracker.syncedCount + 1
+        if (needsFull) {
+            pushFullHistory(
+                view,
+                ChartWebUpdate.FullHistory(
+                    seriesKey = currentSeriesKey,
+                    candles = currentCandles,
+                    fit = state.viewport.isAutoFit
+                ),
+                includeOverlay = true
+            )
         }
     }
 
-    // Collect incremental updates from ChartViewModel: FullHistory only on init/symbol/tf/replay/pagination;
-    // LiveCandleDelta only sends the 1-2 updated/new trailing candles without resending historical list!
-    LaunchedEffect(chartReady, webUpdates) {
-        if (!chartReady) return@LaunchedEffect
+    // Collect live candle delta updates without resending full historical candle list
+    LaunchedEffect(chartReady, useFallbackCanvas, webUpdates) {
+        if (useFallbackCanvas || !chartReady) return@LaunchedEffect
         webUpdates.collect { update ->
             val view = webView ?: return@collect
             when (update) {
                 is ChartWebUpdate.FullHistory -> {
-                    pushFullHistory(view, update, includeOverlay = tracker.syncedSeriesKey == null)
+                    val alreadySynced =
+                        tracker.syncedSeriesKey == update.seriesKey &&
+                            tracker.syncedFirstTime == (update.candles.firstOrNull()?.openTime ?: -1L) &&
+                            tracker.syncedCount == update.candles.size
+                    if (!alreadySynced) {
+                        pushFullHistory(view, update, includeOverlay = tracker.syncedSeriesKey == null)
+                    }
                 }
                 is ChartWebUpdate.LiveCandleDelta -> {
                     if (tracker.syncedSeriesKey != update.seriesKey) {
@@ -336,6 +442,7 @@ fun LightweightChartView(
                             pushFullHistory(view, full, includeOverlay = true)
                         }
                     } else if (update.candles.isNotEmpty()) {
+                        tracker.syncedCount = update.totalCount
                         val deltaPayload = JSONObject().apply {
                             put("seriesKey", update.seriesKey)
                             put("totalCount", update.totalCount)
@@ -352,14 +459,17 @@ fun LightweightChartView(
                 ChartWebUpdate.ResetScroll -> {
                     view.evaluateJavascript("window.scrollToLiveEdge && window.scrollToLiveEdge()", null)
                 }
+                ChartWebUpdate.ResetPriceScale -> {
+                    view.evaluateJavascript("window.resetPriceAutoFitOnly && window.resetPriceAutoFitOnly()", null)
+                }
             }
         }
     }
 
     // Sync alerts / drawings / range measurement independently from candle ticks
-    LaunchedEffect(chartReady, overlayJson) {
+    LaunchedEffect(chartReady, useFallbackCanvas, overlayJson) {
+        if (useFallbackCanvas || !chartReady) return@LaunchedEffect
         val view = webView ?: return@LaunchedEffect
-        if (!chartReady) return@LaunchedEffect
         if (overlayJson != tracker.lastOverlayJson) {
             tracker.lastOverlayJson = overlayJson
             view.evaluateJavascript(
@@ -369,58 +479,113 @@ fun LightweightChartView(
         }
     }
 
-    AndroidView(
-        modifier = modifier.testTag("chart_webview_container"),
-        factory = { context ->
-            WebView(context).apply {
-                setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                setBackgroundColor(android.graphics.Color.rgb(9, 13, 18))
-                isHorizontalScrollBarEnabled = false
-                isVerticalScrollBarEnabled = false
-                overScrollMode = WebView.OVER_SCROLL_NEVER
-                setOnTouchListener { v, event ->
-                    when (event.actionMasked) {
-                        MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
-                            v.parent?.requestDisallowInterceptTouchEvent(true)
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                            v.parent?.requestDisallowInterceptTouchEvent(false)
-                    }
-                    false
-                }
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.cacheMode = WebSettings.LOAD_DEFAULT
-                settings.allowFileAccess = true
-                settings.allowContentAccess = true
-                webChromeClient = WebChromeClient()
-                addJavascriptInterface(bridge, "AndroidChart")
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView, url: String?) {
-                        super.onPageFinished(view, url)
-                        if (url == "about:blank") return
-                        tracker.syncedSeriesKey = null
-                        tracker.lastOverlayJson = ""
-                        chartReady = true
-                    }
-                }
-                webView = this
-                loadUrl("file:///android_asset/lightweight_chart.html")
-            }
-        },
-        update = { view ->
-            if (webView !== view) {
-                webView = view
-            }
-        },
-        onRelease = { view ->
-            chartReady = false
-            webView = null
-            tracker.syncedSeriesKey = null
-            tracker.lastOverlayJson = ""
-            view.removeJavascriptInterface("AndroidChart")
-            view.stopLoading()
-            view.loadUrl("about:blank")
-            view.destroy()
+    // Clear HTML crosshair lines whenever Compose dismisses crosshair
+    LaunchedEffect(chartReady, useFallbackCanvas, state.crosshair.isActive) {
+        if (useFallbackCanvas || !chartReady) return@LaunchedEffect
+        if (!state.crosshair.isActive) {
+            webView?.evaluateJavascript("window.clearCrosshair && window.clearCrosshair()", null)
         }
-    )
+    }
+
+    // Watchdog: if candles are loaded but WebView fails to signal chartReady within 3.5s
+    // (e.g. blocked CDN or broken WebView renderer), fall back to ChartCanvas so candles always render.
+    LaunchedEffect(useFallbackCanvas, chartReady, currentCandles.isNotEmpty()) {
+        if (!useFallbackCanvas && !chartReady && currentCandles.isNotEmpty() && fallbackCanvas != null) {
+            delay(3500L)
+            if (!chartReady) {
+                Log.w("LightweightChartView", "WebView readiness timeout; activating ChartCanvas fallback")
+                useFallbackCanvas = true
+            }
+        }
+    }
+
+    if (useFallbackCanvas && fallbackCanvas != null) {
+        Box(modifier = modifier.testTag("chart_fallback_canvas")) {
+            fallbackCanvas()
+        }
+    } else {
+        AndroidView(
+            modifier = modifier.testTag("chart_webview_container"),
+            factory = { context ->
+                WebView(context).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    if (isAndroidEmulator()) {
+                        setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+                    }
+                    setBackgroundColor(android.graphics.Color.rgb(9, 13, 18))
+                    isHorizontalScrollBarEnabled = false
+                    isVerticalScrollBarEnabled = false
+                    overScrollMode = WebView.OVER_SCROLL_NEVER
+                    setOnTouchListener { v, event ->
+                        when (event.actionMasked) {
+                            MotionEvent.ACTION_DOWN,
+                            MotionEvent.ACTION_POINTER_DOWN,
+                            MotionEvent.ACTION_MOVE ->
+                                v.parent?.requestDisallowInterceptTouchEvent(true)
+                            MotionEvent.ACTION_UP,
+                            MotionEvent.ACTION_CANCEL ->
+                                v.parent?.requestDisallowInterceptTouchEvent(false)
+                        }
+                        false
+                    }
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.setSupportZoom(false)
+                    settings.builtInZoomControls = false
+                    settings.displayZoomControls = false
+                    settings.cacheMode = WebSettings.LOAD_DEFAULT
+                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    settings.allowFileAccess = true
+                    settings.allowContentAccess = true
+                    webChromeClient = WebChromeClient()
+                    addJavascriptInterface(bridge, "AndroidChart")
+                    webViewClient = object : WebViewClient() {
+                        override fun onReceivedError(
+                            view: WebView,
+                            request: WebResourceRequest,
+                            error: WebResourceError
+                        ) {
+                            super.onReceivedError(view, request, error)
+                            if (request.url?.toString()?.contains("lightweight-charts") == true) {
+                                Log.w("LightweightChartView", "WebView resource error: ${error.description}")
+                            }
+                        }
+
+                        override fun onRenderProcessGone(
+                            view: WebView?,
+                            detail: RenderProcessGoneDetail?
+                        ): Boolean {
+                            Log.e("LightweightChartView", "WebView render process gone; switching to ChartCanvas")
+                            if (fallbackCanvas != null) {
+                                useFallbackCanvas = true
+                            }
+                            return true
+                        }
+                    }
+                    webView = this
+                    loadUrl("file:///android_asset/lightweight_chart.html")
+                }
+            },
+            update = { view ->
+                if (webView !== view) {
+                    webView = view
+                }
+            },
+            onRelease = { view ->
+                chartReady = false
+                webView = null
+                tracker.syncedSeriesKey = null
+                tracker.syncedFirstTime = -1L
+                tracker.syncedCount = 0
+                tracker.lastOverlayJson = ""
+                view.removeJavascriptInterface("AndroidChart")
+                view.stopLoading()
+                view.loadUrl("about:blank")
+                view.destroy()
+            }
+        )
+    }
 }
