@@ -1,6 +1,6 @@
 package com.example.ui.chart
 
-import android.annotation.SuppressLint
+import android.annotation.SuppressLint\nimport android.os.Handler\nimport android.os.Looper
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -91,6 +91,22 @@ fun LightweightChartView(
             }
         }
         root.put("lines", lines)
+        val drawingArray = JSONArray()
+        state.drawings.filter { it.type != DrawingType.HORIZONTAL_LINE }.forEach { drawing ->
+            val points = JSONArray()
+            drawing.points.forEach { point ->
+                points.put(JSONObject().apply {
+                    put("time", point.timeMillis / 1000L)
+                    put("price", point.price)
+                })
+            }
+            drawingArray.put(JSONObject().apply {
+                put("type", drawing.type.name)
+                put("color", String.format("#%06X", 0xFFFFFF and drawing.colorHex.toInt()))
+                put("points", points)
+            })
+        }
+        root.put("drawings", drawingArray)
         root.toString()
     }
 
