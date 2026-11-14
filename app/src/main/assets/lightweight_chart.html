@@ -4,10 +4,12 @@
 html,body,#chart{margin:0;width:100%;height:100%;overflow:hidden;background:#090d12}
 #quick{position:absolute;right:5px;top:8px;z-index:5;width:30px;height:30px;border:1px solid #3b4653;border-radius:7px;background:#17212b;color:#f0b90b;font-size:21px;line-height:26px}
 </style>
-<script src="https://unpkg.com/lightweight-charts@5.0.8/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://unpkg.com/lightweight-charts@5.0.8/dist/lightweight-charts.standalone.production.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/lightweight-charts@5.0.8/dist/lightweight-charts.standalone.production.js'"></script>
 </head><body><div id="chart"></div><canvas id="drawing-layer" style="position:absolute;inset:0;pointer-events:none;z-index:3"></canvas><button id="quick" aria-label="Create price alert">+</button>
 <script>
 (function(){
+ window.onerror=function(message,source,line,column,error){if(window.AndroidChart)AndroidChart.onError(String(message)+" @ "+line+":"+column);return false;};
+ if(!window.LightweightCharts){if(window.AndroidChart)AndroidChart.onError("Lightweight Charts library failed to load from both CDN sources");return;}
  const el=document.getElementById('chart');
  const chart=LightweightCharts.createChart(el,{
   width:el.clientWidth,height:el.clientHeight,
@@ -35,10 +37,15 @@ html,body,#chart{margin:0;width:100%;height:100%;overflow:hidden;background:#090
  window.setMarketData=function(payload){
   try{
    const d=JSON.parse(payload);
-   candles.setData(d.candles||[]);
-   if(!hasInitialData && (d.candles||[]).length){chart.timeScale().fitContent();hasInitialData=true;}
+   const raw=Array.isArray(d.candles)?d.candles:[];
+   const byTime=new Map();
+   raw.forEach(x=>{if(x&&Number.isFinite(Number(x.time))&&Number.isFinite(Number(x.open))&&Number.isFinite(Number(x.high))&&Number.isFinite(Number(x.low))&&Number.isFinite(Number(x.close))){byTime.set(Number(x.time),{time:Number(x.time),open:Number(x.open),high:Number(x.high),low:Number(x.low),close:Number(x.close),volume:Number(x.volume)||0});}});
+   const clean=[...byTime.values()].sort((a,b)=>a.time-b.time);
+   candles.setData(clean);
+   if(!hasInitialData && clean.length){chart.timeScale().fitContent();hasInitialData=true;}
+   if(!clean.length && window.AndroidChart)AndroidChart.onError("No valid candle data received by chart");
    else if(d.fit){chart.timeScale().scrollToRealTime();}
-   volume.setData((d.candles||[]).map(x=>({time:x.time,value:x.volume||0,color:x.close>=x.open?'rgba(14,203,129,.35)':'rgba(246,70,93,.35)'})));
+   volume.setData(clean.map(x=>({time:x.time,value:x.volume,color:x.close>=x.open?'rgba(14,203,129,.35)':'rgba(246,70,93,.35)'})));
    clearLines();
    activeDrawings=d.drawings||[];
    (d.lines||[]).forEach(l=>{
