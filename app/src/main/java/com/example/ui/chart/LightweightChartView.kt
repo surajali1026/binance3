@@ -68,7 +68,7 @@ fun LightweightChartView(
     bridge.onQuickAlert = onQuickAlert
     bridge.onManualInteraction = onManualInteraction
 
-    val payload = remember(state.displayedCandles, state.alertsForSymbol, state.drawings) {
+    val payload = remember(state.displayedCandles, state.alertsForSymbol, state.drawings, state.viewport.isAutoFit) {
         val root = JSONObject()
         val data = JSONArray()
         state.displayedCandles.forEach { candle ->
