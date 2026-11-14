@@ -5,7 +5,7 @@ import retrofit2.http.GET
 import retrofit2.http.Query
 
 enum class MarketEndpointMode(val label: String, val socketUrl: String) {
-    FUTURES_PROD("Binance USD-M Futures", "wss://fstream.binance.com/stream"),
+    FUTURES_PROD("Binance USD-M Futures", "wss://fstream.binance.com/market/stream"),
     FUTURES_DEMO("Binance Futures Demo", "wss://demo-fstream.binance.com/stream"),
     BYBIT_LINEAR("Bybit Perpetual Futures", "wss://stream.bybit.com/v5/public/linear"),
     VISION_MIRROR("Binance Vision Mirror", "wss://data-stream.binance.vision/stream")
