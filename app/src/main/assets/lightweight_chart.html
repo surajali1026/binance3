@@ -28,7 +28,9 @@ html,body,#chart{margin:0;width:100%;height:100%;overflow:hidden;background:#090
   scaleMargins:{top:.82,bottom:0},lastValueVisible:false,priceLineVisible:false
  });
  chart.priceScale('volume').applyOptions({scaleMargins:{top:.82,bottom:0},visible:false});
- let lines=[]; let hasInitialData=false;\n const overlay=document.getElementById('drawing-layer'); const ctx=overlay.getContext('2d'); let activeDrawings=[];\n function paintDrawings(){ const w=el.clientWidth,h=el.clientHeight,dpr=window.devicePixelRatio||1; overlay.width=w*dpr;overlay.height=h*dpr;overlay.style.width=w+'px';overlay.style.height=h+'px';ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h); activeDrawings.forEach(d=>{const pts=d.points||[];if(pts.length<1)return;const x1=chart.timeScale().timeToCoordinate(pts[0].time),y1=candles.priceToCoordinate(pts[0].price);if(x1==null||y1==null)return;ctx.strokeStyle=d.color||'#f0b90b';ctx.fillStyle=(d.color||'#f0b90b')+'22';ctx.lineWidth=2;ctx.beginPath();if(d.type==='TRENDLINE'&&pts.length>1){const x2=chart.timeScale().timeToCoordinate(pts[1].time),y2=candles.priceToCoordinate(pts[1].price);if(x2==null||y2==null)return;ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}else if(d.type==='RECTANGLE'&&pts.length>1){const x2=chart.timeScale().timeToCoordinate(pts[1].time),y2=candles.priceToCoordinate(pts[1].price);if(x2==null||y2==null)return;ctx.rect(x1,y1,x2-x1,y2-y1);ctx.fill();ctx.stroke();}}); }
+ let lines=[]; let hasInitialData=false;
+ const overlay=document.getElementById('drawing-layer'); const ctx=overlay.getContext('2d'); let activeDrawings=[];
+ function paintDrawings(){ const w=el.clientWidth,h=el.clientHeight,dpr=window.devicePixelRatio||1; overlay.width=w*dpr;overlay.height=h*dpr;overlay.style.width=w+'px';overlay.style.height=h+'px';ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h); activeDrawings.forEach(d=>{const pts=d.points||[];if(pts.length<1)return;const x1=chart.timeScale().timeToCoordinate(pts[0].time),y1=candles.priceToCoordinate(pts[0].price);if(x1==null||y1==null)return;ctx.strokeStyle=d.color||'#f0b90b';ctx.fillStyle=(d.color||'#f0b90b')+'22';ctx.lineWidth=2;ctx.beginPath();if(d.type==='TRENDLINE'&&pts.length>1){const x2=chart.timeScale().timeToCoordinate(pts[1].time),y2=candles.priceToCoordinate(pts[1].price);if(x2==null||y2==null)return;ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}else if(d.type==='RECTANGLE'&&pts.length>1){const x2=chart.timeScale().timeToCoordinate(pts[1].time),y2=candles.priceToCoordinate(pts[1].price);if(x2==null||y2==null)return;ctx.rect(x1,y1,x2-x1,y2-y1);ctx.fill();ctx.stroke();}}); }
  function clearLines(){ lines.forEach(x=>{try{candles.removePriceLine(x)}catch(e){}});lines=[]; }
  window.setMarketData=function(payload){
   try{
@@ -56,7 +58,8 @@ html,body,#chart{margin:0;width:100%;height:100%;overflow:hidden;background:#090
   const range=candles.priceToCoordinate(candles.data().length?candles.data()[candles.data().length-1].close:0);
   const d=candles.data(); if(d.length&&window.AndroidChart) AndroidChart.onQuickAlert(Number(d[d.length-1].close));
  });
- chart.timeScale().subscribeVisibleLogicalRangeChange(paintDrawings);\n window.addEventListener('resize',()=>{chart.applyOptions({width:el.clientWidth,height:el.clientHeight});paintDrawings();});
+ chart.timeScale().subscribeVisibleLogicalRangeChange(paintDrawings);
+ window.addEventListener('resize',()=>{chart.applyOptions({width:el.clientWidth,height:el.clientHeight});paintDrawings();});
  window.chartReady=true;
  if(window.AndroidChart) AndroidChart.onReady();
 })();
