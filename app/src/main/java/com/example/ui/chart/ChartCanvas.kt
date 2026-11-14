@@ -171,13 +171,12 @@ fun ChartCanvas(
                     }
                     .pointerInput(Unit) {
                         val touchSlop = viewConfiguration.touchSlop
-                        val longPressTimeout = min(350L, viewConfiguration.longPressTimeoutMillis)
+                        // Slightly deliberate long-press keeps normal chart panning responsive.
+                        val longPressTimeout = min(450L, viewConfiguration.longPressTimeoutMillis)
                         val hitThresholdPx = with(density) { 24.dp.toPx() }
                         val handleThresholdPx = with(density) { 28.dp.toPx() }
                         val verticalUnlockThresholdPx = with(density) { 16.dp.toPx() }
                         val doubleTapSlopPx = with(density) { 36.dp.toPx() }
-                        val minPinchSpanX = with(density) { 26.dp.toPx() }
-                        val minPinchSpanY = with(density) { 34.dp.toPx() }
 
                         awaitEachGesture {
                             flingJob?.cancel()
@@ -266,29 +265,15 @@ fun ChartCanvas(
                                     if (pressedCount >= 2) {
                                         isMultiTouch = true
                                         longPressJob.cancel()
-                                        val p0 = pressedChanges[0]
-                                        val p1 = pressedChanges[1]
-                                        val prevSpanX = abs(p0.previousPosition.x - p1.previousPosition.x)
-                                        val currSpanX = abs(p0.position.x - p1.position.x)
-                                        val prevSpanY = abs(p0.previousPosition.y - p1.previousPosition.y)
-                                        val currSpanY = abs(p0.position.y - p1.position.y)
-
-                                        val zoomX = if (prevSpanX > minPinchSpanX && currSpanX > minPinchSpanX) {
-                                            (currSpanX / prevSpanX).coerceIn(0.82f, 1.22f)
-                                        } else {
-                                            1f
-                                        }
-                                        val zoomY = if (prevSpanY > minPinchSpanY && currSpanY > minPinchSpanY &&
-                                            (!currentState.viewport.isAutoFit || currSpanY > currSpanX * 1.15f)
-                                        ) {
-                                            (currSpanY / prevSpanY).coerceIn(0.82f, 1.22f)
-                                        } else {
-                                            1f
-                                        }
+                                        // Use the pointer-event scale factor instead of measuring only X/Y spans.
+                                        // This supports natural diagonal pinches and keeps the pinch midpoint anchored.
+                                        val zoomFactor = event.calculateZoom().coerceIn(0.82f, 1.22f)
+                                        val zoomX = if (zoomFactor.isFinite()) zoomFactor else 1f
+                                        val zoomY = 1f
 
                                         val pan = event.calculatePan()
                                         val centroid = event.calculateCentroid(useCurrent = false)
-                                        if (zoomX != 1f || zoomY != 1f) {
+                                        if (zoomX != 1f) {
                                             onPinchZoom(zoomX, zoomY, centroid.x, centroid.y, plotHeightPx)
                                         }
                                         if (pan != Offset.Zero) {
