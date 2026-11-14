@@ -374,6 +374,34 @@ fun ChartScreen(
                 }
             }
 
+            // Non-destructive notice pill (e.g. Mark/Index info in Spot Vision preview region)
+            val notice = state.noticeMessage
+            if (notice != null) {
+                LaunchedEffect(notice) {
+                    kotlinx.coroutines.delay(3200L)
+                    viewModel.dismissNotice()
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 12.dp, start = 16.dp, end = 16.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(ElevatedSurface.copy(alpha = 0.95f))
+                        .border(0.75.dp, AmberGold.copy(alpha = 0.75f), RoundedCornerShape(10.dp))
+                        .clickable { viewModel.dismissNotice() }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .testTag("chart_notice_banner")
+                ) {
+                    Text(
+                        text = notice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AmberGold,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
             // Initial History Loading or Error Overlay
             if (state.isLoadingHistory && state.candles.isEmpty()) {
                 Box(

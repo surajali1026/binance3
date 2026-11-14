@@ -91,6 +91,7 @@ data class ChartUiState(
     val isLoadingHistory: Boolean = true,
     val isPaginatingBack: Boolean = false,
     val errorMessage: String? = null,
+    val noticeMessage: String? = null,
     val connectionState: SocketConnectionState = SocketConnectionState.DISCONNECTED,
     val countdownMillis: Long = 0L,
     val viewport: ChartViewportState = ChartViewportState(),
@@ -139,6 +140,7 @@ class ChartViewModel(
     private val _isLoadingHistory = MutableStateFlow(true)
     private val _isPaginatingBack = MutableStateFlow(false)
     private val _errorMessage = MutableStateFlow<String?>(null)
+    private val _noticeMessage = MutableStateFlow<String?>(null)
     private val _countdownMillis = MutableStateFlow(0L)
     private val _viewport = MutableStateFlow(ChartViewportState())
     val viewportState: StateFlow<ChartViewportState> = _viewport.asStateFlow()
@@ -293,7 +295,7 @@ class ChartViewModel(
         interactionFlow,
         _isLoadingHistory,
         _isPaginatingBack,
-        _errorMessage,
+        combine(_errorMessage, _noticeMessage) { err, notice -> err to notice },
         marketRepository.connectionState,
         _countdownMillis,
         chartStateRepository.activeAlerts,
@@ -305,7 +307,10 @@ class ChartViewModel(
         val ui = arr[1] as InteractionSlice
         val loading = arr[2] as Boolean
         val paginating = arr[3] as Boolean
-        val error = arr[4] as String?
+        @Suppress("UNCHECKED_CAST")
+        val errPair = arr[4] as Pair<String?, String?>
+        val error = errPair.first
+        val notice = errPair.second
         val conn = arr[5] as SocketConnectionState
         val countdown = arr[6] as Long
         @Suppress("UNCHECKED_CAST")
@@ -335,6 +340,7 @@ class ChartViewModel(
             isLoadingHistory = loading,
             isPaginatingBack = paginating,
             errorMessage = error,
+            noticeMessage = notice,
             connectionState = conn,
             countdownMillis = countdown,
             viewport = ui.viewport,
@@ -422,12 +428,22 @@ class ChartViewModel(
 
     fun selectPriceSource(source: PriceSource) {
         if (_priceSource.value == source) return
+        if (source != PriceSource.LAST &&
+            marketRepository.endpointMode.value == com.example.data.remote.MarketEndpointMode.VISION_MIRROR
+        ) {
+            _noticeMessage.value = "${source.label} requires Futures API (Spot fallback active in this region)"
+            return
+        }
         _priceSource.value = source
         _crosshair.value = CrosshairState()
         shouldAutoFitOnNextLoad = false
         exitBarReplay()
         persistChartState()
         reloadChartFeed()
+    }
+
+    fun dismissNotice() {
+        _noticeMessage.value = null
     }
 
     private fun observeSymbolPersistedData(symbol: String) {
@@ -505,7 +521,13 @@ class ChartViewModel(
                     )
                 }
             }.onFailure { err ->
-                if (_candles.value.isEmpty()) {
+                if (source != PriceSource.LAST) {
+                    _priceSource.value = PriceSource.LAST
+                    _noticeMessage.value = "${source.label} unavailable in this region/server; showing Last Price"
+                    persistChartState()
+                    reloadChartFeed()
+                    return@launch
+                } else if (_candles.value.isEmpty()) {
                     _errorMessage.value = err.localizedMessage ?: "Unable to load chart candles"
                 }
             }
