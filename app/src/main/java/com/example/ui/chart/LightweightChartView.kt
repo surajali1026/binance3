@@ -1,6 +1,8 @@
 package com.example.ui.chart
 
-import android.annotation.SuppressLint\nimport android.os.Handler\nimport android.os.Looper
+import android.annotation.SuppressLint
+import android.os.Handler
+import android.os.Looper
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -71,7 +73,8 @@ fun LightweightChartView(
                 put("volume", candle.volume)
             })
         }
-        root.put("candles", data)\n        root.put("fit", state.viewport.isAutoFit)
+        root.put("candles", data)
+        root.put("fit", state.viewport.isAutoFit)
         val lines = JSONArray()
         state.alertsForSymbol.filter { it.isActive }.forEach { alert ->
             lines.put(JSONObject().apply {
