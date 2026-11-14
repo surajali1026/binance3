@@ -30,6 +30,52 @@ html,body{
     pointer-events:none;
     z-index:3;
 }
+#bar-countdown{
+    position:absolute;
+    right:2px;
+    top:0;
+    min-width:56px;
+    padding:2px 5px;
+    border-radius:3px;
+    background:rgba(14,203,129,0.85);
+    color:#ffffff;
+    font-family:monospace;
+    font-size:10px;
+    font-weight:700;
+    line-height:1.15;
+    text-align:center;
+    pointer-events:none;
+    z-index:4;
+    display:none;
+    box-sizing:border-box;
+}
+#price-plus-handle{
+    position:absolute;
+    right:50px;
+    top:50%;
+    width:28px;
+    height:28px;
+    border-radius:14px;
+    border:1.5px solid #f0b90b;
+    background:rgba(23,33,43,0.96);
+    color:#f0b90b;
+    font-family:Arial,sans-serif;
+    font-size:19px;
+    font-weight:700;
+    line-height:25px;
+    text-align:center;
+    padding:0;
+    z-index:6;
+    touch-action:none;
+    cursor:ns-resize;
+    box-shadow:0 2px 6px rgba(0,0,0,0.45);
+    display:none;
+}
+#price-plus-handle.dragging{
+    background:#f0b90b;
+    color:#090d12;
+    transform:scale(1.12);
+}
 #status-fallback{
     position:absolute;
     inset:0;
@@ -51,6 +97,8 @@ html,body{
 <body>
 <div id="chart"></div>
 <canvas id="drawing-layer"></canvas>
+<div id="bar-countdown"></div>
+<button id="price-plus-handle" aria-label="Move or tap to create price alert">+</button>
 <div id="status-fallback"></div>
 <script>
 (function(){
@@ -72,6 +120,7 @@ html,body{
     let queuedOverlay = null;
     let queuedScrollLive = false;
     let queuedResetPriceOnly = false;
+    let queuedCountdown = null;
 
     window.setMarketData = function(payload){
         queuedMarketData = payload;
@@ -88,6 +137,9 @@ html,body{
     };
     window.resetPriceAutoFitOnly = function(){
         queuedResetPriceOnly = true;
+    };
+    window.setBarCountdown = function(label, isBull, visible){
+        queuedCountdown = { label: label, isBull: isBull, visible: visible };
     };
 
     function initChart(){
@@ -216,20 +268,33 @@ html,body{
         let hasInitialData = false;
         let lastCandleTime = null;
         let lastCandleCount = 0;
+        let barTimes = [];
+        let barIntervalSec = 60;
 
         let previousSeriesKey = null;
         let previousSymbol = null;
         let previousPrecision = -1;
         let lastKnownClose = 0;
+        let lastKnownBull = true;
         let previousLinesSig = '';
         let activeDrawings = [];
+        let activeAlerts = [];
         let pendingPoints = [];
         let rangeMeasurement = null;
+        let activeTool = 'NONE';
+        let isPickingReplay = false;
+        let pinnedQuickAlertPrice = null;
+        let draggingQuickAlertPrice = null;
+        let quickGuideLine = null;
+        let previousQuickGuideSig = '';
+        let countdownState = { label: '', isBull: true, visible: false };
         let hasValidSize = el.clientWidth > 0 && el.clientHeight > 0;
         let isCrosshairLocked = false;
 
         const overlay = document.getElementById('drawing-layer');
         const ctx = overlay.getContext('2d');
+        const countdownEl = document.getElementById('bar-countdown');
+        const plusHandleEl = document.getElementById('price-plus-handle');
         let cachedW = 0;
         let cachedH = 0;
         let cachedDpr = 0;
@@ -276,6 +341,87 @@ html,body{
             chart.timeScale().setVisibleLogicalRange({ from: from, to: to });
         }
 
+        function getPriceScaleWidth(){
+            try{
+                const w = chart.priceScale('right').width();
+                if(Number.isFinite(w) && w > 20) return w;
+            }catch(_){}
+            return 64;
+        }
+
+        function refreshBarTimes(clean){
+            barTimes = new Array(clean.length);
+            for(let i = 0; i < clean.length; i++) barTimes[i] = clean[i].time;
+            if(clean.length >= 2){
+                const d = clean[clean.length - 1].time - clean[clean.length - 2].time;
+                if(Number.isFinite(d) && d > 0) barIntervalSec = d;
+            }
+        }
+
+        function resolveTimeToX(timeSec){
+            const ts = chart.timeScale();
+            if(!barTimes.length){
+                return ts.timeToCoordinate(timeSec);
+            }
+            const first = barTimes[0];
+            const last = barTimes[barTimes.length - 1];
+            const interval = barIntervalSec > 0 ? barIntervalSec : 60;
+            let logical;
+            if(timeSec <= first){
+                logical = (timeSec - first) / interval;
+            } else if(timeSec >= last){
+                logical = (barTimes.length - 1) + (timeSec - last) / interval;
+            } else {
+                let lo = 0, hi = barTimes.length - 1;
+                while(lo <= hi){
+                    const mid = (lo + hi) >> 1;
+                    const t = barTimes[mid];
+                    if(t === timeSec){ logical = mid; break; }
+                    if(t < timeSec) lo = mid + 1; else hi = mid - 1;
+                }
+                if(logical === undefined){
+                    const leftIdx = Math.max(0, Math.min(barTimes.length - 1, lo - 1));
+                    const rightIdx = Math.max(0, Math.min(barTimes.length - 1, lo));
+                    if(leftIdx === rightIdx){
+                        logical = leftIdx;
+                    } else {
+                        const t0 = barTimes[leftIdx];
+                        const t1 = barTimes[rightIdx];
+                        const frac = t1 === t0 ? 0 : (timeSec - t0) / (t1 - t0);
+                        logical = leftIdx + frac;
+                    }
+                }
+            }
+            const coord = ts.logicalToCoordinate(logical);
+            return coord != null ? coord : ts.timeToCoordinate(timeSec);
+        }
+
+        function resolveXToTime(localX){
+            const ts = chart.timeScale();
+            if(!barTimes.length){
+                const t = ts.coordinateToTime(localX);
+                return t != null ? Number(t) : Math.floor(Date.now() / 1000);
+            }
+            const logical = ts.coordinateToLogical(localX);
+            if(logical == null || !Number.isFinite(logical)){
+                const t = ts.coordinateToTime(localX);
+                return t != null ? Number(t) : barTimes[barTimes.length - 1];
+            }
+            const interval = barIntervalSec > 0 ? barIntervalSec : 60;
+            if(logical <= 0){
+                return Math.round(barTimes[0] + logical * interval);
+            }
+            const lastIdx = barTimes.length - 1;
+            if(logical >= lastIdx){
+                return Math.round(barTimes[lastIdx] + (logical - lastIdx) * interval);
+            }
+            const idx = Math.floor(logical);
+            const frac = logical - idx;
+            const t0 = barTimes[idx];
+            const t1 = barTimes[Math.min(lastIdx, idx + 1)];
+            return Math.round(t0 + (t1 - t0) * frac);
+        }
+
         function updateChartData(clean, seriesKey) {
             if (!clean.length) return;
 
@@ -286,6 +432,7 @@ html,body{
                 hasValidSize = true;
             }
 
+            refreshBarTimes(clean);
             applyPricePrecision(clean[clean.length - 1].close);
             const seriesChanged = seriesKey != null && seriesKey !== previousSeriesKey;
             const nextSymbol = seriesKey != null ? String(seriesKey).split('_')[0] : null;
@@ -330,9 +477,77 @@ html,body{
                 }
             }
 
-            lastCandleTime = clean[clean.length - 1].time;
+            const lastBar = clean[clean.length - 1];
+            lastCandleTime = lastBar.time;
             lastCandleCount = clean.length;
-            lastKnownClose = clean[clean.length - 1].close;
+            lastKnownClose = lastBar.close;
+            lastKnownBull = lastBar.close >= lastBar.open;
+        }
+
+        function updateQuickGuideLine(){
+            const guidePrice = draggingQuickAlertPrice != null ? draggingQuickAlertPrice : pinnedQuickAlertPrice;
+            const sig = guidePrice != null && Number.isFinite(guidePrice) ? String(guidePrice) : '';
+            if(sig === previousQuickGuideSig) return;
+            previousQuickGuideSig = sig;
+            if(quickGuideLine){
+                try{ candles.removePriceLine(quickGuideLine); }catch(_){}
+                quickGuideLine = null;
+            }
+            if(guidePrice != null && Number.isFinite(guidePrice) && guidePrice > 0){
+                quickGuideLine = candles.createPriceLine({
+                    price: guidePrice,
+                    color: '#f0b90b',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: ''
+                });
+            }
+        }
+
+        function positionOverlayElements(){
+            const w = el.clientWidth;
+            const h = el.clientHeight;
+            if(w <= 0 || h <= 0) return;
+            const psW = getPriceScaleWidth();
+            const plotH = Math.max(h - 28, 60);
+
+            // Position bar countdown directly underneath the live price tag on the right price axis
+            if(countdownState.visible && countdownState.label && lastKnownClose > 0){
+                const priceY = candles.priceToCoordinate(lastKnownClose);
+                if(priceY != null && Number.isFinite(priceY)){
+                    const topY = Math.max(18, Math.min(plotH - 22, priceY + 11));
+                    countdownEl.style.display = 'block';
+                    countdownEl.style.top = topY + 'px';
+                    countdownEl.style.width = Math.max(52, psW - 4) + 'px';
+                    countdownEl.style.background = countdownState.isBull
+                        ? 'rgba(14,203,129,0.82)'
+                        : 'rgba(246,70,93,0.82)';
+                    countdownEl.textContent = countdownState.label;
+                } else {
+                    countdownEl.style.display = 'none';
+                }
+            } else {
+                countdownEl.style.display = 'none';
+            }
+
+            // Position movable '+' button on the price scale border
+            const handlePrice = draggingQuickAlertPrice != null
+                ? draggingQuickAlertPrice
+                : (pinnedQuickAlertPrice != null ? pinnedQuickAlertPrice : lastKnownClose);
+            if(handlePrice > 0 && hasInitialData){
+                const hy = candles.priceToCoordinate(handlePrice);
+                if(hy != null && Number.isFinite(hy)){
+                    const clampedY = Math.max(20, Math.min(plotH - 20, hy));
+                    plusHandleEl.style.display = 'block';
+                    plusHandleEl.style.right = Math.max(44, psW - 14) + 'px';
+                    plusHandleEl.style.top = (clampedY - 14) + 'px';
+                } else {
+                    plusHandleEl.style.display = 'none';
+                }
+            } else {
+                plusHandleEl.style.display = 'none';
+            }
         }
 
         function paintDrawings(){
@@ -353,76 +568,167 @@ html,body{
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             ctx.clearRect(0, 0, w, h);
 
-            const ts = chart.timeScale();
+            const psW = getPriceScaleWidth();
+            const plotW = Math.max(w - psW, 60);
+
+            function drawHandle(hx, hy, fillColor){
+                ctx.beginPath();
+                ctx.arc(hx, hy, 6.5, 0, Math.PI * 2);
+                ctx.fillStyle = fillColor || '#f0b90b';
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(hx, hy, 3, 0, Math.PI * 2);
+                ctx.fillStyle = '#090d12';
+                ctx.fill();
+            }
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(0, 0, plotW, h);
+            ctx.clip();
+
             for(let i = 0; i < activeDrawings.length; i++){
                 const d = activeDrawings[i];
                 const pts = d.points || [];
                 if(pts.length < 1) continue;
-                const x1 = ts.timeToCoordinate(pts[0].time);
-                const y1 = candles.priceToCoordinate(pts[0].price);
-                if(x1 == null || y1 == null) continue;
                 const color = d.color || '#f0b90b';
                 ctx.strokeStyle = color;
-                ctx.fillStyle = color + '22';
-                ctx.lineWidth = d.selected ? 3 : 2;
+                ctx.fillStyle = color + '24';
+                ctx.lineWidth = d.selected ? 2.5 : 2;
                 ctx.setLineDash(d.dashed ? [6, 4] : []);
-                ctx.beginPath();
-                if(d.type === 'TRENDLINE' && pts.length > 1){
-                    const x2 = ts.timeToCoordinate(pts[1].time);
+
+                if(d.type === 'HORIZONTAL_LINE'){
+                    const y1 = candles.priceToCoordinate(pts[0].price);
+                    if(y1 == null) continue;
+                    // Draw live preview while dragging, or selection handle dot
+                    if(d._dragging){
+                        ctx.beginPath();
+                        ctx.moveTo(0, y1);
+                        ctx.lineTo(plotW, y1);
+                        ctx.stroke();
+                    }
+                    if(d.selected){
+                        ctx.setLineDash([]);
+                        drawHandle(plotW * 0.5, y1, color);
+                    }
+                } else if(d.type === 'TRENDLINE' && pts.length > 1){
+                    const x1 = resolveTimeToX(pts[0].time);
+                    const y1 = candles.priceToCoordinate(pts[0].price);
+                    const x2 = resolveTimeToX(pts[1].time);
                     const y2 = candles.priceToCoordinate(pts[1].price);
-                    if(x2 == null || y2 == null) continue;
+                    if(x1 == null || y1 == null || x2 == null || y2 == null) continue;
+                    ctx.beginPath();
                     ctx.moveTo(x1, y1);
                     ctx.lineTo(x2, y2);
                     ctx.stroke();
+                    if(d.selected){
+                        ctx.setLineDash([]);
+                        drawHandle(x1, y1, color);
+                        drawHandle(x2, y2, color);
+                    }
                 } else if(d.type === 'RECTANGLE' && pts.length > 1){
-                    const x2 = ts.timeToCoordinate(pts[1].time);
+                    const x1 = resolveTimeToX(pts[0].time);
+                    const y1 = candles.priceToCoordinate(pts[0].price);
+                    const x2 = resolveTimeToX(pts[1].time);
                     const y2 = candles.priceToCoordinate(pts[1].price);
-                    if(x2 == null || y2 == null) continue;
-                    ctx.rect(x1, y1, x2 - x1, y2 - y1);
+                    if(x1 == null || y1 == null || x2 == null || y2 == null) continue;
+                    const left = Math.min(x1, x2);
+                    const top = Math.min(y1, y2);
+                    const rw = Math.max(2, Math.abs(x2 - x1));
+                    const rh = Math.max(2, Math.abs(y2 - y1));
+                    ctx.beginPath();
+                    ctx.rect(left, top, rw, rh);
                     ctx.fill();
                     ctx.stroke();
+                    if(d.selected){
+                        ctx.setLineDash([]);
+                        drawHandle(x1, y1, color);
+                        drawHandle(x2, y2, color);
+                    }
                 }
                 ctx.setLineDash([]);
             }
 
+            // Selected alert visual drag handle / live drag line
+            for(let i = 0; i < activeAlerts.length; i++){
+                const a = activeAlerts[i];
+                const ay = candles.priceToCoordinate(a.price);
+                if(ay == null) continue;
+                if(a._dragging){
+                    ctx.strokeStyle = '#f0b90b';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([5, 5]);
+                    ctx.beginPath();
+                    ctx.moveTo(0, ay);
+                    ctx.lineTo(plotW, ay);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+                if(a.selected){
+                    drawHandle(26, ay, '#f0b90b');
+                }
+            }
+
+            // Price Difference (Range Measurement)
             if(rangeMeasurement && rangeMeasurement.start && rangeMeasurement.end){
-                const x1 = ts.timeToCoordinate(rangeMeasurement.start.time);
+                const x1 = resolveTimeToX(rangeMeasurement.start.time);
                 const y1 = candles.priceToCoordinate(rangeMeasurement.start.price);
-                const x2 = ts.timeToCoordinate(rangeMeasurement.end.time);
+                const x2 = resolveTimeToX(rangeMeasurement.end.time);
                 const y2 = candles.priceToCoordinate(rangeMeasurement.end.price);
                 if(x1 != null && y1 != null && x2 != null && y2 != null){
-                    ctx.fillStyle = 'rgba(41,182,246,0.14)';
-                    ctx.strokeStyle = '#29b6f6';
-                    ctx.lineWidth = 1.5;
-                    ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-                    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                    const isGain = rangeMeasurement.end.price >= rangeMeasurement.start.price;
+                    const boxFill = isGain ? 'rgba(14,203,129,0.16)' : 'rgba(246,70,93,0.16)';
+                    const boxStroke = isGain ? '#0ecb81' : '#f6465d';
+                    const left = Math.min(x1, x2);
+                    const top = Math.min(y1, y2);
+                    const bw = Math.max(2, Math.abs(x2 - x1));
+                    const bh = Math.max(2, Math.abs(y2 - y1));
+                    ctx.fillStyle = boxFill;
+                    ctx.strokeStyle = boxStroke;
+                    ctx.lineWidth = 1.8;
+                    ctx.fillRect(left, top, bw, bh);
+                    ctx.strokeRect(left, top, bw, bh);
                     if(rangeMeasurement.label){
                         ctx.font = 'bold 11px Arial';
                         const tw = ctx.measureText(rangeMeasurement.label).width;
-                        const lx = Math.min(x1, x2) + 6;
-                        const ly = Math.min(y1, y2) - 6;
-                        ctx.fillStyle = 'rgba(18,24,33,0.92)';
-                        ctx.fillRect(lx - 4, ly - 13, tw + 8, 17);
-                        ctx.fillStyle = '#29b6f6';
-                        ctx.fillText(rangeMeasurement.label, lx, ly - 1);
+                        const padX = 8;
+                        const badgeW = tw + padX * 2;
+                        const badgeH = 20;
+                        const lx = Math.max(6, Math.min(plotW - badgeW - 6, left + bw / 2 - badgeW / 2));
+                        const preferredY = isGain ? (top - badgeH - 6) : (top + bh + 6);
+                        const ly = Math.max(6, Math.min(h - badgeH - 28, preferredY));
+                        ctx.fillStyle = boxStroke;
+                        ctx.beginPath();
+                        if(ctx.roundRect){
+                            ctx.roundRect(lx, ly, badgeW, badgeH, 6);
+                        } else {
+                            ctx.rect(lx, ly, badgeW, badgeH);
+                        }
+                        ctx.fill();
+                        ctx.fillStyle = '#ffffff';
+                        ctx.fillText(rangeMeasurement.label, lx + padX, ly + 14);
                     }
                 }
             }
 
+            // Pending points (works anywhere including right-offset space)
             for(let i = 0; i < pendingPoints.length; i++){
                 const pt = pendingPoints[i];
-                const px = ts.timeToCoordinate(pt.time);
+                const px = resolveTimeToX(pt.time);
                 const py = candles.priceToCoordinate(pt.price);
                 if(px != null && py != null){
                     ctx.beginPath();
-                    ctx.arc(px, py, 5, 0, Math.PI * 2);
+                    ctx.arc(px, py, 6, 0, Math.PI * 2);
                     ctx.fillStyle = '#f0b90b';
                     ctx.fill();
                     ctx.strokeStyle = '#090d12';
-                    ctx.lineWidth = 1.5;
+                    ctx.lineWidth = 1.8;
                     ctx.stroke();
                 }
             }
+
+            ctx.restore();
+            positionOverlayElements();
         }
 
         function schedulePaintDrawings(){
@@ -454,7 +760,7 @@ html,body{
                             ? LightweightCharts.LineStyle.Dashed
                             : LightweightCharts.LineStyle.Solid,
                         axisLabelVisible: true,
-                        title: l.title || ''
+                        title: ''
                     }));
                 }
             }
@@ -504,6 +810,9 @@ html,body{
                 }
 
                 if(d.lines !== undefined) syncLines(d.lines);
+                if(d.alerts !== undefined){
+                    activeAlerts = Array.isArray(d.alerts) ? d.alerts : [];
+                }
                 if(d.drawings !== undefined){
                     activeDrawings = Array.isArray(d.drawings) ? d.drawings : [];
                 }
@@ -512,6 +821,14 @@ html,body{
                 }
                 if(d.rangeMeasurement !== undefined){
                     rangeMeasurement = d.rangeMeasurement || null;
+                }
+                if(d.activeTool !== undefined) activeTool = d.activeTool || 'NONE';
+                if(d.isPickingReplay !== undefined) isPickingReplay = !!d.isPickingReplay;
+                if(d.quickAlertPrice !== undefined){
+                    pinnedQuickAlertPrice = (d.quickAlertPrice != null && Number.isFinite(Number(d.quickAlertPrice)))
+                        ? Number(d.quickAlertPrice)
+                        : null;
+                    updateQuickGuideLine();
                 }
                 schedulePaintDrawings();
             }catch(e){
@@ -530,12 +847,19 @@ html,body{
                     if(!bar) continue;
                     candles.update(bar);
                     volume.update(toVolumeBar(bar));
+                    if(barTimes.length && bar.time === barTimes[barTimes.length - 1]){
+                        barTimes[barTimes.length - 1] = bar.time;
+                    } else if(!barTimes.length || bar.time > barTimes[barTimes.length - 1]){
+                        barTimes.push(bar.time);
+                    }
                     lastCandleTime = bar.time;
                     lastKnownClose = bar.close;
+                    lastKnownBull = bar.close >= bar.open;
                 }
                 if(typeof d.totalCount === 'number' && d.totalCount > 0){
                     lastCandleCount = d.totalCount;
                 }
+                positionOverlayElements();
             }catch(e){
                 if(window.AndroidChart) AndroidChart.onError(String(e));
             }
@@ -545,22 +869,42 @@ html,body{
             try{
                 const d = typeof payload === 'string' ? JSON.parse(payload) : payload;
                 syncLines(d.lines);
+                activeAlerts = Array.isArray(d.alerts) ? d.alerts : [];
                 activeDrawings = Array.isArray(d.drawings) ? d.drawings : [];
                 pendingPoints = Array.isArray(d.pendingPoints) ? d.pendingPoints : [];
                 rangeMeasurement = d.rangeMeasurement || null;
+                if(d.activeTool !== undefined) activeTool = d.activeTool || 'NONE';
+                if(d.isPickingReplay !== undefined) isPickingReplay = !!d.isPickingReplay;
+                if(d.quickAlertPrice !== undefined){
+                    pinnedQuickAlertPrice = (d.quickAlertPrice != null && Number.isFinite(Number(d.quickAlertPrice)))
+                        ? Number(d.quickAlertPrice)
+                        : null;
+                    updateQuickGuideLine();
+                }
                 schedulePaintDrawings();
             }catch(e){
                 if(window.AndroidChart) AndroidChart.onError(String(e));
             }
         };
 
+        window.setBarCountdown = function(label, isBull, visible){
+            countdownState = {
+                label: label || '',
+                isBull: isBull !== false,
+                visible: !!visible
+            };
+            positionOverlayElements();
+        };
+
         window.scrollToLiveEdge = function(){
             chart.priceScale('right').applyOptions({ autoScale: true });
             applyTradingViewRange(lastCandleCount, null);
+            schedulePaintDrawings();
         };
 
         window.resetPriceAutoFitOnly = function(){
             chart.priceScale('right').applyOptions({ autoScale: true });
+            schedulePaintDrawings();
         };
 
         const fullScrollOptions = {
@@ -591,7 +935,7 @@ html,body{
             const rect = el.getBoundingClientRect();
             const x = clientX - rect.left;
             const y = clientY - rect.top;
-            const time = chart.timeScale().coordinateToTime(x);
+            const time = resolveXToTime(x);
             const price = candles.coordinateToPrice(y);
             if(time != null && price != null){
                 try{ chart.setCrosshairPosition(Number(price), time, candles); }catch(_){}
@@ -601,6 +945,148 @@ html,body{
             }
         }
 
+        function distToSegment(px, py, x1, y1, x2, y2){
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const lenSq = dx * dx + dy * dy;
+            if(lenSq === 0) return Math.hypot(px - x1, py - y1);
+            const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+            return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+        }
+
+        function hitTestDrawingAnchor(localX, localY, thresholdPx){
+            const psW = getPriceScaleWidth();
+            const plotW = Math.max(el.clientWidth - psW, 60);
+            for(let i = activeDrawings.length - 1; i >= 0; i--){
+                const d = activeDrawings[i];
+                if(!d.selected || d.locked) continue;
+                const pts = d.points || [];
+                if(d.type === 'HORIZONTAL_LINE' && pts.length >= 1){
+                    const hy = candles.priceToCoordinate(pts[0].price);
+                    if(hy != null && Math.hypot(localX - plotW * 0.5, localY - hy) <= thresholdPx){
+                        return { drawing: d, anchorIndex: 0 };
+                    }
+                } else {
+                    for(let a = 0; a < pts.length; a++){
+                        const ax = resolveTimeToX(pts[a].time);
+                        const ay = candles.priceToCoordinate(pts[a].price);
+                        if(ax != null && ay != null && Math.hypot(localX - ax, localY - ay) <= thresholdPx){
+                            return { drawing: d, anchorIndex: a };
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        function hitTestDrawingBody(localX, localY, thresholdPx, onlySelectedUnlocked){
+            for(let i = activeDrawings.length - 1; i >= 0; i--){
+                const d = activeDrawings[i];
+                if(onlySelectedUnlocked && (!d.selected || d.locked)) continue;
+                const pts = d.points || [];
+                if(pts.length < 1) continue;
+                if(d.type === 'HORIZONTAL_LINE'){
+                    const y1 = candles.priceToCoordinate(pts[0].price);
+                    if(y1 != null && Math.abs(localY - y1) <= thresholdPx) return d;
+                } else if(d.type === 'TRENDLINE' && pts.length > 1){
+                    const x1 = resolveTimeToX(pts[0].time);
+                    const y1 = candles.priceToCoordinate(pts[0].price);
+                    const x2 = resolveTimeToX(pts[1].time);
+                    const y2 = candles.priceToCoordinate(pts[1].price);
+                    if(x1 != null && y1 != null && x2 != null && y2 != null &&
+                        distToSegment(localX, localY, x1, y1, x2, y2) <= thresholdPx){
+                        return d;
+                    }
+                } else if(d.type === 'RECTANGLE' && pts.length > 1){
+                    const x1 = resolveTimeToX(pts[0].time);
+                    const y1 = candles.priceToCoordinate(pts[0].price);
+                    const x2 = resolveTimeToX(pts[1].time);
+                    const y2 = candles.priceToCoordinate(pts[1].price);
+                    if(x1 != null && y1 != null && x2 != null && y2 != null){
+                        const left = Math.min(x1, x2) - thresholdPx * 0.4;
+                        const right = Math.max(x1, x2) + thresholdPx * 0.4;
+                        const top = Math.min(y1, y2) - thresholdPx * 0.4;
+                        const bottom = Math.max(y1, y2) + thresholdPx * 0.4;
+                        if(localX >= left && localX <= right && localY >= top && localY <= bottom){
+                            return d;
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        function hitTestAlertLine(localY, thresholdPx, onlySelected){
+            for(let i = activeAlerts.length - 1; i >= 0; i--){
+                const a = activeAlerts[i];
+                if(onlySelected && !a.selected) continue;
+                const ay = candles.priceToCoordinate(a.price);
+                if(ay != null && Math.abs(localY - ay) <= thresholdPx) return a;
+            }
+            return null;
+        }
+
+        // Movable '+' Button Drag & Tap along Price Scale
+        let plusDrag = null;
+        plusHandleEl.addEventListener('pointerdown', e => {
+            e.stopPropagation();
+            plusHandleEl.setPointerCapture && plusHandleEl.setPointerCapture(e.pointerId);
+            const startPrice = pinnedQuickAlertPrice != null ? pinnedQuickAlertPrice : lastKnownClose;
+            plusDrag = {
+                pointerId: e.pointerId,
+                startY: e.clientY,
+                moved: false,
+                currentPrice: startPrice
+            };
+            plusHandleEl.classList.add('dragging');
+        }, { passive: false });
+
+        plusHandleEl.addEventListener('pointermove', e => {
+            if(!plusDrag || e.pointerId !== plusDrag.pointerId) return;
+            e.stopPropagation();
+            if(Math.abs(e.clientY - plusDrag.startY) > 5){
+                plusDrag.moved = true;
+            }
+            if(plusDrag.moved){
+                const rect = el.getBoundingClientRect();
+                const psW = getPriceScaleWidth();
+                const localY = Math.max(16, Math.min(rect.height - 32, e.clientY - rect.top));
+                const price = candles.coordinateToPrice(localY);
+                if(price != null && Number.isFinite(Number(price)) && Number(price) > 0){
+                    draggingQuickAlertPrice = Number(price);
+                    plusDrag.currentPrice = draggingQuickAlertPrice;
+                    plusHandleEl.style.right = Math.max(44, psW - 14) + 'px';
+                    plusHandleEl.style.top = (localY - 14) + 'px';
+                    updateQuickGuideLine();
+                }
+            }
+        }, { passive: false });
+
+        function endPlusDrag(e){
+            if(!plusDrag || e.pointerId !== plusDrag.pointerId) return;
+            e.stopPropagation();
+            const wasMoved = plusDrag.moved;
+            const finalPrice = plusDrag.currentPrice;
+            plusDrag = null;
+            plusHandleEl.classList.remove('dragging');
+            if(wasMoved){
+                pinnedQuickAlertPrice = finalPrice;
+                draggingQuickAlertPrice = null;
+                updateQuickGuideLine();
+                positionOverlayElements();
+                if(finalPrice > 0 && window.AndroidChart && AndroidChart.onPriceAxisTap){
+                    AndroidChart.onPriceAxisTap(Number(finalPrice));
+                }
+            } else {
+                const target = (finalPrice > 0 ? finalPrice : lastKnownClose);
+                if(target > 0 && window.AndroidChart && AndroidChart.onQuickAlert){
+                    AndroidChart.onQuickAlert(Number(target));
+                }
+            }
+        }
+        plusHandleEl.addEventListener('pointerup', endPlusDrag, { passive: false });
+        plusHandleEl.addEventListener('pointercancel', endPlusDrag, { passive: false });
+
         let activePointers = new Set();
         let dragStart = null;
         let longPressTimer = 0;
@@ -609,24 +1095,41 @@ html,body{
         let didNotifyManualThisGesture = false;
         let suppressNextClickUntil = 0;
         let lastTapInfo = null;
+        let activeObjectDrag = null; // { mode: 'anchor'|'whole'|'alert', drawing, anchorIndex, alert, origPoints, origTime, origPrice, currentPrice, deltaTime, deltaPrice }
 
-        chart.subscribeClick(p => {
-            if(Date.now() < suppressNextClickUntil) return;
+        function dispatchTapAtClientPoint(clientX, clientY){
+            const rect = el.getBoundingClientRect();
+            const localX = clientX - rect.left;
+            const localY = clientY - rect.top;
+            const psW = getPriceScaleWidth();
+            if(localX >= Math.max(rect.width - psW, 120)) return;
+            const timeSec = resolveXToTime(localX);
+            const price = candles.coordinateToPrice(localY);
+            if(timeSec == null || price == null || !Number.isFinite(Number(price))) return;
             if(isCrosshairLocked){
                 clearCrosshairState(true);
                 return;
             }
-            if(!p || !p.time || !p.point) return;
-            const price = candles.coordinateToPrice(p.point.y);
-            if(price != null && window.AndroidChart){
-                AndroidChart.onChartTap(Number(p.time), Number(price));
+            const canSelect = activeTool === 'NONE' && !isPickingReplay;
+            const hitD = canSelect ? hitTestDrawingBody(localX, localY, 24, false) : null;
+            const hitA = (canSelect && !hitD) ? hitTestAlertLine(localY, 22, false) : null;
+            if(window.AndroidChart){
+                if(AndroidChart.onChartTapWithHit){
+                    AndroidChart.onChartTapWithHit(Number(timeSec), Number(price), hitD ? hitD.id : '', hitA ? hitA.id : '');
+                } else {
+                    AndroidChart.onChartTap(Number(timeSec), Number(price));
+                }
             }
-        });
+        }
 
         el.addEventListener('pointerdown', e => {
             activePointers.add(e.pointerId);
             if(activePointers.size > 1){
                 if(longPressTimer){ clearTimeout(longPressTimer); longPressTimer = 0; }
+                if(activeObjectDrag){
+                    activeObjectDrag = null;
+                    chart.applyOptions({ handleScroll: fullScrollOptions });
+                }
                 didGestureMove = true;
                 suppressNextClickUntil = Date.now() + 450;
                 if(isCrosshairScrubbing){
@@ -643,14 +1146,62 @@ html,body{
             dragStart = { x: e.clientX, y: e.clientY, time: Date.now() };
             didGestureMove = false;
             didNotifyManualThisGesture = false;
-            if(longPressTimer){ clearTimeout(longPressTimer); }
+            activeObjectDrag = null;
+            if(longPressTimer){ clearTimeout(longPressTimer); longPressTimer = 0; }
+
             const rect = el.getBoundingClientRect();
             const localX = e.clientX - rect.left;
-            const isInsidePlotArea = localX < Math.max(rect.width - 66, 120);
-            if(isInsidePlotArea){
+            const localY = e.clientY - rect.top;
+            const psW = getPriceScaleWidth();
+            const isInsidePlotArea = localX < Math.max(rect.width - psW, 120);
+
+            if(isInsidePlotArea && activeTool === 'NONE' && !isPickingReplay){
+                const anchorHit = hitTestDrawingAnchor(localX, localY, 34);
+                if(anchorHit){
+                    activeObjectDrag = {
+                        mode: 'anchor',
+                        drawing: anchorHit.drawing,
+                        anchorIndex: anchorHit.anchorIndex,
+                        origPoints: (anchorHit.drawing.points || []).map(p => ({ time: p.time, price: p.price }))
+                    };
+                    activeObjectDrag.drawing._dragging = true;
+                    chart.applyOptions({ handleScroll: false });
+                    return;
+                }
+                const bodyHit = hitTestDrawingBody(localX, localY, 28, true);
+                if(bodyHit){
+                    const startT = resolveXToTime(localX);
+                    const startP = candles.coordinateToPrice(localY);
+                    if(startT != null && startP != null){
+                        activeObjectDrag = {
+                            mode: 'whole',
+                            drawing: bodyHit,
+                            origPoints: (bodyHit.points || []).map(p => ({ time: p.time, price: p.price })),
+                            startTime: Number(startT),
+                            startPrice: Number(startP),
+                            deltaTime: 0,
+                            deltaPrice: 0
+                        };
+                        activeObjectDrag.drawing._dragging = true;
+                        chart.applyOptions({ handleScroll: false });
+                        return;
+                    }
+                }
+                const alertHit = hitTestAlertLine(localY, 24, true);
+                if(alertHit){
+                    activeObjectDrag = {
+                        mode: 'alert',
+                        alert: alertHit,
+                        currentPrice: alertHit.price
+                    };
+                    activeObjectDrag.alert._dragging = true;
+                    chart.applyOptions({ handleScroll: false });
+                    return;
+                }
+
                 longPressTimer = setTimeout(() => {
                     longPressTimer = 0;
-                    if(!dragStart || didGestureMove || activePointers.size > 1) return;
+                    if(!dragStart || didGestureMove || activePointers.size > 1 || activeObjectDrag) return;
                     isCrosshairScrubbing = true;
                     isCrosshairLocked = true;
                     suppressNextClickUntil = Date.now() + 500;
@@ -664,6 +1215,39 @@ html,body{
         }, { passive: true });
 
         el.addEventListener('pointermove', e => {
+            if(activeObjectDrag){
+                const rect = el.getBoundingClientRect();
+                const localX = e.clientX - rect.left;
+                const localY = e.clientY - rect.top;
+                const moveDist = dragStart ? Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y) : 10;
+                if(moveDist > 5) didGestureMove = true;
+                const t = resolveXToTime(localX);
+                const p = candles.coordinateToPrice(localY);
+                if(t != null && p != null && Number.isFinite(Number(p))){
+                    if(activeObjectDrag.mode === 'anchor'){
+                        const pts = activeObjectDrag.drawing.points;
+                        if(pts && pts[activeObjectDrag.anchorIndex]){
+                            pts[activeObjectDrag.anchorIndex].time = Number(t);
+                            pts[activeObjectDrag.anchorIndex].price = Number(p);
+                        }
+                    } else if(activeObjectDrag.mode === 'whole'){
+                        const dt = Number(t) - activeObjectDrag.startTime;
+                        const dp = Number(p) - activeObjectDrag.startPrice;
+                        activeObjectDrag.deltaTime = dt;
+                        activeObjectDrag.deltaPrice = dp;
+                        const pts = activeObjectDrag.drawing.points;
+                        for(let k = 0; k < activeObjectDrag.origPoints.length; k++){
+                            pts[k].time = activeObjectDrag.origPoints[k].time + dt;
+                            pts[k].price = activeObjectDrag.origPoints[k].price + dp;
+                        }
+                    } else if(activeObjectDrag.mode === 'alert'){
+                        activeObjectDrag.currentPrice = Number(p);
+                        activeObjectDrag.alert.price = Number(p);
+                    }
+                    schedulePaintDrawings();
+                }
+                return;
+            }
             if(isCrosshairScrubbing){
                 reportCrosshairAtClientPoint(e.clientX, e.clientY);
                 return;
@@ -686,6 +1270,29 @@ html,body{
         function endPointerGesture(e){
             activePointers.delete(e.pointerId);
             if(longPressTimer){ clearTimeout(longPressTimer); longPressTimer = 0; }
+            if(activeObjectDrag && activePointers.size === 0){
+                const drag = activeObjectDrag;
+                activeObjectDrag = null;
+                if(drag.drawing) drag.drawing._dragging = false;
+                if(drag.alert) drag.alert._dragging = false;
+                chart.applyOptions({ handleScroll: fullScrollOptions });
+                if(didGestureMove && window.AndroidChart){
+                    if(drag.mode === 'anchor' && AndroidChart.onMoveDrawingAnchor){
+                        const pt = drag.drawing.points[drag.anchorIndex];
+                        AndroidChart.onMoveDrawingAnchor(drag.drawing.id, drag.anchorIndex, Number(pt.time), Number(pt.price));
+                    } else if(drag.mode === 'whole' && AndroidChart.onMoveWholeDrawing){
+                        AndroidChart.onMoveWholeDrawing(drag.drawing.id, Number(drag.deltaTime), Number(drag.deltaPrice));
+                    } else if(drag.mode === 'alert' && AndroidChart.onMoveAlertPrice){
+                        AndroidChart.onMoveAlertPrice(drag.alert.id, Number(drag.currentPrice));
+                    }
+                } else if(e.type === 'pointerup'){
+                    dispatchTapAtClientPoint(e.clientX, e.clientY);
+                }
+                schedulePaintDrawings();
+                dragStart = null;
+                didNotifyManualThisGesture = false;
+                return;
+            }
             if(isCrosshairScrubbing && activePointers.size === 0){
                 isCrosshairScrubbing = false;
                 suppressNextClickUntil = Date.now() + 300;
@@ -694,11 +1301,15 @@ html,body{
                 const now = Date.now();
                 const rect = el.getBoundingClientRect();
                 const localX = e.clientX - rect.left;
-                if(lastTapInfo && (now - lastTapInfo.time) <= 280 &&
+                const psW = getPriceScaleWidth();
+                const onPriceAxis = localX >= Math.max(rect.width - psW, 120);
+                if(activeTool !== 'NONE' || isPickingReplay){
+                    dispatchTapAtClientPoint(e.clientX, e.clientY);
+                } else if(lastTapInfo && (now - lastTapInfo.time) <= 280 &&
                     Math.hypot(e.clientX - lastTapInfo.x, e.clientY - lastTapInfo.y) <= 32){
                     lastTapInfo = null;
                     suppressNextClickUntil = now + 350;
-                    if(localX >= Math.max(rect.width - 66, 120)){
+                    if(onPriceAxis){
                         window.resetPriceAutoFitOnly();
                     } else {
                         window.scrollToLiveEdge();
@@ -708,13 +1319,19 @@ html,body{
                     }
                 } else {
                     lastTapInfo = { x: e.clientX, y: e.clientY, time: now };
-                    if(localX >= Math.max(rect.width - 66, 120)){
+                    if(onPriceAxis){
                         const localY = e.clientY - rect.top;
                         const tappedPrice = candles.coordinateToPrice(localY);
-                        if(tappedPrice != null && Number.isFinite(Number(tappedPrice)) &&
-                            window.AndroidChart && AndroidChart.onPriceAxisTap){
-                            AndroidChart.onPriceAxisTap(Number(tappedPrice));
+                        if(tappedPrice != null && Number.isFinite(Number(tappedPrice)) && Number(tappedPrice) > 0){
+                            pinnedQuickAlertPrice = Number(tappedPrice);
+                            updateQuickGuideLine();
+                            positionOverlayElements();
+                            if(window.AndroidChart && AndroidChart.onPriceAxisTap){
+                                AndroidChart.onPriceAxisTap(Number(tappedPrice));
+                            }
                         }
+                    } else {
+                        dispatchTapAtClientPoint(e.clientX, e.clientY);
                     }
                 }
             }
@@ -779,6 +1396,10 @@ html,body{
         if(queuedResetPriceOnly){
             window.resetPriceAutoFitOnly();
             queuedResetPriceOnly = false;
+        }
+        if(queuedCountdown){
+            window.setBarCountdown(queuedCountdown.label, queuedCountdown.isBull, queuedCountdown.visible);
+            queuedCountdown = null;
         }
 
         window.chartReady = true;

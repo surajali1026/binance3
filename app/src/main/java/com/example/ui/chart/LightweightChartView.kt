@@ -43,12 +43,15 @@ import kotlin.math.max
 import kotlin.math.min
 
 private class ChartJavascriptBridge(
-    var onTap: (Long, Double) -> Unit,
+    var onTap: (Long, Double, String?, String?) -> Unit,
     var onCrosshair: (Long, Double) -> Unit,
     var onDismissCrosshair: () -> Unit,
     var onDoubleTapReset: () -> Unit,
     var onPriceAxisTap: (Double) -> Unit,
     var onQuickAlert: (Double) -> Unit,
+    var onMoveDrawingAnchor: (String, Int, ChartPoint) -> Unit,
+    var onMoveWholeDrawing: (String, Long, Double) -> Unit,
+    var onMoveAlertPrice: (String, Double) -> Unit,
     var onManualInteraction: () -> Unit,
     var onChartReady: () -> Unit,
     var onLibraryLoadFailed: (String) -> Unit,
@@ -59,7 +62,20 @@ private class ChartJavascriptBridge(
     @JavascriptInterface
     fun onChartTap(timeSeconds: Double, price: Double) {
         val time = (timeSeconds * 1000.0).toLong()
-        mainHandler.post { onTap(time, price) }
+        mainHandler.post { onTap(time, price, null, null) }
+    }
+
+    @JavascriptInterface
+    fun onChartTapWithHit(timeSeconds: Double, price: Double, drawingId: String, alertId: String) {
+        val time = (timeSeconds * 1000.0).toLong()
+        mainHandler.post {
+            onTap(
+                time,
+                price,
+                drawingId.takeIf { it.isNotBlank() },
+                alertId.takeIf { it.isNotBlank() }
+            )
+        }
     }
 
     @JavascriptInterface
@@ -86,6 +102,23 @@ private class ChartJavascriptBridge(
     @JavascriptInterface
     fun onQuickAlert(price: Double) {
         mainHandler.post { onQuickAlert(price) }
+    }
+
+    @JavascriptInterface
+    fun onMoveDrawingAnchor(drawingId: String, anchorIndex: Int, timeSeconds: Double, price: Double) {
+        val time = (timeSeconds * 1000.0).toLong()
+        mainHandler.post { onMoveDrawingAnchor(drawingId, anchorIndex, ChartPoint(time, price)) }
+    }
+
+    @JavascriptInterface
+    fun onMoveWholeDrawing(drawingId: String, deltaTimeSeconds: Double, deltaPrice: Double) {
+        val dt = (deltaTimeSeconds * 1000.0).toLong()
+        mainHandler.post { onMoveWholeDrawing(drawingId, dt, deltaPrice) }
+    }
+
+    @JavascriptInterface
+    fun onMoveAlertPrice(alertId: String, newPrice: Double) {
+        mainHandler.post { onMoveAlertPrice(alertId, newPrice) }
     }
 
     @JavascriptInterface
@@ -215,6 +248,9 @@ fun LightweightChartView(
     onDoubleTapReset: () -> Unit = {},
     onPriceAxisTap: (Double) -> Unit = {},
     onQuickAlert: (Double) -> Unit,
+    onMoveDrawingAnchor: (String, Int, ChartPoint) -> Unit = { _, _, _ -> },
+    onMoveWholeDrawing: (String, Long, Double) -> Unit = { _, _, _ -> },
+    onMoveAlertPrice: (String, Double) -> Unit = { _, _ -> },
     onManualInteraction: () -> Unit,
     fallbackCanvas: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -226,6 +262,9 @@ fun LightweightChartView(
     val latestOnDoubleTapReset by rememberUpdatedState(onDoubleTapReset)
     val latestOnPriceAxisTap by rememberUpdatedState(onPriceAxisTap)
     val latestOnQuickAlert by rememberUpdatedState(onQuickAlert)
+    val latestOnMoveDrawingAnchor by rememberUpdatedState(onMoveDrawingAnchor)
+    val latestOnMoveWholeDrawing by rememberUpdatedState(onMoveWholeDrawing)
+    val latestOnMoveAlertPrice by rememberUpdatedState(onMoveAlertPrice)
     val latestOnManualInteraction by rememberUpdatedState(onManualInteraction)
     val latestBuildFullHistory by rememberUpdatedState(buildFullHistory)
 
@@ -236,12 +275,15 @@ fun LightweightChartView(
 
     val bridge = remember {
         ChartJavascriptBridge(
-            onTap = { _, _ -> },
+            onTap = { _, _, _, _ -> },
             onCrosshair = { _, _ -> },
             onDismissCrosshair = { },
             onDoubleTapReset = { },
             onPriceAxisTap = { },
             onQuickAlert = { },
+            onMoveDrawingAnchor = { _, _, _ -> },
+            onMoveWholeDrawing = { _, _, _ -> },
+            onMoveAlertPrice = { _, _ -> },
             onManualInteraction = { },
             onChartReady = { },
             onLibraryLoadFailed = { },
@@ -249,14 +291,20 @@ fun LightweightChartView(
         )
     }
 
-    bridge.onTap = { timeMillis, price ->
+    bridge.onTap = { timeMillis, price, hitDrawingId, hitAlertId ->
         val s = latestState
         val candles = s.displayedCandles
         val index = findNearestCandleIndex(candles, timeMillis)
         val priceTol = max(abs(price) * 0.004, (s.contract?.tickSize ?: 0.01) * 8.0)
         val canSelectExisting = s.activeTool == DrawingTool.NONE && !s.replayState.isPickingStart
-        val tappedDrawing = if (canSelectExisting) hitTestDrawing(s.drawings, timeMillis, price, priceTol) else null
-        val tappedAlert = if (canSelectExisting && tappedDrawing == null) hitTestAlert(s.alertsForSymbol, price, priceTol) else null
+        val tappedDrawing = if (canSelectExisting) {
+            if (hitDrawingId != null) s.drawings.firstOrNull { it.id == hitDrawingId }
+            else hitTestDrawing(s.drawings, timeMillis, price, priceTol)
+        } else null
+        val tappedAlert = if (canSelectExisting && tappedDrawing == null) {
+            if (hitAlertId != null) s.alertsForSymbol.firstOrNull { it.id == hitAlertId && it.isActive }
+            else hitTestAlert(s.alertsForSymbol, price, priceTol)
+        } else null
         latestOnTap(ChartPoint(timeMillis, price), tappedDrawing, tappedAlert, index)
     }
     bridge.onCrosshair = { timeMillis, price ->
@@ -268,6 +316,9 @@ fun LightweightChartView(
     bridge.onDoubleTapReset = { latestOnDoubleTapReset() }
     bridge.onPriceAxisTap = { price -> latestOnPriceAxisTap(price) }
     bridge.onQuickAlert = { price -> latestOnQuickAlert(price) }
+    bridge.onMoveDrawingAnchor = { id, idx, pt -> latestOnMoveDrawingAnchor(id, idx, pt) }
+    bridge.onMoveWholeDrawing = { id, dt, dp -> latestOnMoveWholeDrawing(id, dt, dp) }
+    bridge.onMoveAlertPrice = { id, p -> latestOnMoveAlertPrice(id, p) }
     bridge.onManualInteraction = { latestOnManualInteraction() }
     bridge.onChartReady = {
         useFallbackCanvas = false
@@ -289,16 +340,25 @@ fun LightweightChartView(
         state.selectedDrawingId,
         state.selectedAlertId,
         state.pendingPoints,
-        state.rangeMeasurement
+        state.rangeMeasurement,
+        state.activeTool,
+        state.replayState.isPickingStart,
+        state.axisQuickAlertPrice
     ) {
         val root = JSONObject()
         val lines = JSONArray()
+        val alertsArray = JSONArray()
         state.alertsForSymbol.filter { it.isActive }.forEach { alert ->
             lines.put(JSONObject().apply {
                 put("price", alert.targetPrice)
-                put("title", "Alert")
+                put("title", "")
                 put("color", "#f0b90b")
                 put("dashed", true)
+                put("selected", alert.id == state.selectedAlertId)
+            })
+            alertsArray.put(JSONObject().apply {
+                put("id", alert.id)
+                put("price", alert.targetPrice)
                 put("selected", alert.id == state.selectedAlertId)
             })
         }
@@ -306,7 +366,7 @@ fun LightweightChartView(
             drawing.points.firstOrNull()?.let { point ->
                 lines.put(JSONObject().apply {
                     put("price", point.price)
-                    put("title", if (drawing.isLocked) "Locked" else "Line")
+                    put("title", "")
                     put("color", String.format("#%06X", 0xFFFFFF and drawing.colorHex.toInt()))
                     put("dashed", drawing.lineStyle != LineStyle.SOLID)
                     put("selected", drawing.id == state.selectedDrawingId)
@@ -314,9 +374,10 @@ fun LightweightChartView(
             }
         }
         root.put("lines", lines)
+        root.put("alerts", alertsArray)
 
         val drawingArray = JSONArray()
-        state.drawings.filter { it.type != DrawingType.HORIZONTAL_LINE }.forEach { drawing ->
+        state.drawings.forEach { drawing ->
             val points = JSONArray()
             drawing.points.forEach { point ->
                 points.put(JSONObject().apply {
@@ -325,7 +386,9 @@ fun LightweightChartView(
                 })
             }
             drawingArray.put(JSONObject().apply {
+                put("id", drawing.id)
                 put("type", drawing.type.name)
+                put("locked", drawing.isLocked)
                 put("color", String.format("#%06X", 0xFFFFFF and drawing.colorHex.toInt()))
                 put("dashed", drawing.lineStyle != LineStyle.SOLID)
                 put("selected", drawing.id == state.selectedDrawingId)
@@ -342,6 +405,9 @@ fun LightweightChartView(
             })
         }
         root.put("pendingPoints", pendingArr)
+        root.put("activeTool", state.activeTool.name)
+        root.put("isPickingReplay", state.replayState.isPickingStart)
+        root.put("quickAlertPrice", state.axisQuickAlertPrice ?: JSONObject.NULL)
 
         state.rangeMeasurement?.let { range ->
             val pct = if (range.start.price != 0.0) {
@@ -349,7 +415,8 @@ fun LightweightChartView(
             } else 0.0
             val diff = range.end.price - range.start.price
             val precision = state.contract?.pricePrecision ?: 2
-            val label = "${ChartNumberFormatter.formatPercent(pct)} (${ChartNumberFormatter.formatPrice(diff, precision)}) · ${range.barCount} bars"
+            val duration = ChartNumberFormatter.formatDuration(range.end.timeMillis - range.start.timeMillis)
+            val label = "${ChartNumberFormatter.formatPrice(diff, precision)} (${ChartNumberFormatter.formatPercent(pct)}) • ${range.barCount} bars • $duration"
             root.put("rangeMeasurement", JSONObject().apply {
                 put("start", JSONObject().apply {
                     put("time", range.start.timeMillis / 1000L)
@@ -376,8 +443,14 @@ fun LightweightChartView(
             if (includeOverlay) {
                 val ov = JSONObject(overlayJson)
                 put("lines", ov.optJSONArray("lines"))
+                put("alerts", ov.optJSONArray("alerts"))
                 put("drawings", ov.optJSONArray("drawings"))
                 put("pendingPoints", ov.optJSONArray("pendingPoints"))
+                put("activeTool", ov.optString("activeTool", "NONE"))
+                put("isPickingReplay", ov.optBoolean("isPickingReplay", false))
+                if (!ov.isNull("quickAlertPrice")) {
+                    put("quickAlertPrice", ov.optDouble("quickAlertPrice"))
+                }
                 if (ov.has("rangeMeasurement")) {
                     put("rangeMeasurement", ov.optJSONObject("rangeMeasurement"))
                 }
@@ -485,6 +558,19 @@ fun LightweightChartView(
         if (!state.crosshair.isActive) {
             webView?.evaluateJavascript("window.clearCrosshair && window.clearCrosshair()", null)
         }
+    }
+
+    // Sync bar countdown directly underneath the live price tag on the right price axis
+    val showCountdown = state.preferences.showCountdown && !state.replayState.isActive && state.countdownMillis > 0L && currentCandles.isNotEmpty()
+    val countdownLabel = if (showCountdown) ChartNumberFormatter.formatCountdown(state.countdownMillis) else ""
+    val lastBar = currentCandles.lastOrNull()
+    val isBullBar = if (lastBar != null) lastBar.close >= lastBar.open else true
+    LaunchedEffect(chartReady, useFallbackCanvas, showCountdown, countdownLabel, isBullBar) {
+        if (useFallbackCanvas || !chartReady) return@LaunchedEffect
+        webView?.evaluateJavascript(
+            "window.setBarCountdown && window.setBarCountdown(${JSONObject.quote(countdownLabel)}, $isBullBar, $showCountdown)",
+            null
+        )
     }
 
     // Watchdog: if candles are loaded but WebView fails to signal chartReady within 3.5s

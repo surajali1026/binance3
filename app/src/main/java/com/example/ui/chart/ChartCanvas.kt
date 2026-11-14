@@ -634,32 +634,48 @@ fun ChartCanvas(
                     }
                 }
 
-                // TradingView-style Floating "+" Button at tapped price level (44dp touch target, 28dp badge)
-                val quickPrice = state.axisQuickAlertPrice
-                if (quickPrice != null) {
+                // TradingView-style Movable "+" Button along the Price Scale (48dp touch target, 30dp badge)
+                val quickPrice = state.axisQuickAlertPrice ?: state.currentPrice
+                if (quickPrice != null && !state.replayState.isActive) {
+                    val latestQuickPrice by rememberUpdatedState(quickPrice)
                     val quickY = mapper.priceToY(quickPrice)
-                    val touchBoxPx = with(density) { 44.dp.toPx() }
+                    val touchBoxPx = with(density) { 48.dp.toPx() }
                     val clampedY = (quickY - touchBoxPx / 2f)
                         .coerceIn(0f, (plotHeightPx - touchBoxPx).coerceAtLeast(0f))
+                    var dragPosY by remember { mutableFloatStateOf(quickY) }
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .offset { IntOffset(x = 0, y = clampedY.roundToInt()) }
-                            .size(44.dp)
-                            .clickable { onQuickAlertPlusClick(quickPrice) }
+                            .size(48.dp)
+                            .pointerInput(plotHeightPx) {
+                                detectVerticalDragGestures(
+                                    onDragStart = {
+                                        dragPosY = currentMapper.priceToY(latestQuickPrice)
+                                    },
+                                    onVerticalDrag = { _, dragAmount ->
+                                        dragPosY = (dragPosY + dragAmount).coerceIn(8f, (plotHeightPx - 8f).coerceAtLeast(8f))
+                                        onPriceAxisTap(currentMapper.yToPrice(dragPosY))
+                                    }
+                                )
+                            }
+                            .clickable { onQuickAlertPlusClick(latestQuickPrice) }
                             .testTag("floating_plus_alert_button"),
                         contentAlignment = Alignment.Center
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(28.dp)
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(ElevatedSurface)
+                                .padding(1.5.dp)
                                 .clip(CircleShape)
                                 .background(AmberGold),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Add,
-                                contentDescription = "Add alert at selected price",
+                                contentDescription = "Move or tap to create alert at selected price",
                                 tint = CanvasVoid,
                                 modifier = Modifier.size(18.dp)
                             )

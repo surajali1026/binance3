@@ -20,13 +20,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -177,6 +175,9 @@ fun ChartScreen(
                 onDoubleTapReset = viewModel::onPlotDoubleTap,
                 onPriceAxisTap = { price -> viewModel.setAxisQuickAlertPrice(price) },
                 onQuickAlert = { price -> requestCreateAlert(price) },
+                onMoveDrawingAnchor = viewModel::moveDrawingAnchor,
+                onMoveWholeDrawing = viewModel::moveWholeDrawing,
+                onMoveAlertPrice = viewModel::moveAlertPrice,
                 onManualInteraction = viewModel::onChartManualInteraction,
                 fallbackCanvas = {
                     ChartCanvas(
@@ -327,96 +328,12 @@ fun ChartScreen(
                 )
             }
 
-            // Live Bar Countdown Pill (TradingView-style bar close timer)
-            if (!state.replayState.isActive && state.countdownMillis > 0L && state.candles.isNotEmpty()) {
-                val countdownLabel = ChartNumberFormatter.formatCountdown(state.countdownMillis)
-                if (countdownLabel.isNotBlank()) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(end = 68.dp, bottom = 36.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(ElevatedSurface.copy(alpha = 0.92f))
-                            .border(0.75.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                            .testTag("chart_countdown_badge")
-                    ) {
-                        Text(
-                            text = countdownLabel,
-                            style = com.example.ui.theme.TabularMonoStyle.copy(
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            ),
-                            color = AmberGold
-                        )
-                    }
-                }
-            }
-
-            // Quick Alert "+" Button / Tapped-Price Quick Alert Pill
-            val tappedPrice = state.axisQuickAlertPrice
-            val topRightOffset = if (state.crosshair.isActive || state.isFullScreen || state.rangeMeasurement != null) 48.dp else 10.dp
-            if (selectedDrawing == null && selectedAlert == null && !state.replayState.isActive) {
-                if (tappedPrice != null) {
-                    val precision = state.contract?.pricePrecision ?: 2
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = topRightOffset, end = 68.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(ElevatedSurface.copy(alpha = 0.95f))
-                            .border(0.75.dp, AmberGold.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
-                            .clickable { requestCreateAlert(tappedPrice) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .testTag("floating_plus_alert_button")
-                    ) {
-                        Text(
-                            text = "+ Alert @ ${ChartNumberFormatter.formatPrice(tappedPrice, precision)}",
-                            style = com.example.ui.theme.TabularMonoStyle.copy(
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            ),
-                            color = AmberGold
-                        )
-                    }
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = topRightOffset, end = 64.dp)
-                            .size(48.dp)
-                            .clickable {
-                                val target = state.currentPrice ?: state.displayedCandles.lastOrNull()?.close ?: 0.0
-                                requestCreateAlert(target)
-                            }
-                            .testTag("chart_quick_alert_plus_button"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(ElevatedSurface.copy(alpha = 0.94f))
-                                .border(0.75.dp, BorderSubtle, RoundedCornerShape(8.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Add,
-                                contentDescription = "Create price alert",
-                                tint = AmberGold,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
             // Price Reset Pill (appears whenever user manually zoomed/panned or switched timeframe)
             if (!state.viewport.isAutoFit && selectedDrawing == null && !state.replayState.isActive) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 136.dp, bottom = 36.dp)
+                        .padding(end = 76.dp, bottom = 36.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(ElevatedSurface.copy(alpha = 0.94f))
                         .border(0.75.dp, AmberGold.copy(alpha = 0.7f), RoundedCornerShape(8.dp))

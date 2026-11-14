@@ -961,8 +961,6 @@ class ChartViewModel(
         } else {
             _selectedDrawingId.value = null
             _selectedAlertId.value = null
-            // TradingView-style: tapping any price section on chart shows the "+" alert button at that price
-            _axisQuickAlertPrice.value = point.price
         }
     }
 
