@@ -71,7 +71,7 @@ fun LightweightChartView(
                 put("volume", candle.volume)
             })
         }
-        root.put("candles", data)
+        root.put("candles", data)\n        root.put("fit", state.viewport.isAutoFit)
         val lines = JSONArray()
         state.alertsForSymbol.filter { it.isActive }.forEach { alert ->
             lines.put(JSONObject().apply {
