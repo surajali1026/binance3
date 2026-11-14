@@ -61,6 +61,12 @@ html,body,#chart{margin:0;width:100%;height:100%;overflow:hidden;background:#090
   const range=candles.priceToCoordinate(candles.data().length?candles.data()[candles.data().length-1].close:0);
   const d=candles.data(); if(d.length&&window.AndroidChart) AndroidChart.onQuickAlert(Number(d[d.length-1].close));
  });
+ let dragStart=null;
+ el.addEventListener('pointerdown',e=>{dragStart={x:e.clientX,y:e.clientY};},{passive:true});
+ el.addEventListener('pointermove',e=>{if(!dragStart)return;const dx=e.clientX-dragStart.x,dy=e.clientY-dragStart.y;if(Math.abs(dx)+Math.abs(dy)>8){if(window.AndroidChart)AndroidChart.onManualInteraction();dragStart=null;}},{passive:true});
+ el.addEventListener('pointerup',()=>{dragStart=null;},{passive:true});
+ el.addEventListener('pointercancel',()=>{dragStart=null;},{passive:true});
+ el.addEventListener('wheel',()=>{if(window.AndroidChart)AndroidChart.onManualInteraction();},{passive:true});
  chart.timeScale().subscribeVisibleLogicalRangeChange(paintDrawings);
  window.addEventListener('resize',()=>{chart.applyOptions({width:el.clientWidth,height:el.clientHeight});paintDrawings();});
  window.chartReady=true;
