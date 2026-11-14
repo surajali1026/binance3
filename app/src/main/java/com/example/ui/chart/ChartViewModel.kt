@@ -666,6 +666,12 @@ class ChartViewModel(
         autoFitIfNeeded(uiState.value.displayedCandles, force = true)
     }
 
+    fun onChartManualInteraction() {
+        if (_viewport.value.isAutoFit) {
+            _viewport.update { it.copy(isAutoFit = false) }
+        }
+    }
+
     fun onPlotDoubleTap() {
         _axisQuickAlertPrice.value = null
         if (!_viewport.value.isAutoFit) {
