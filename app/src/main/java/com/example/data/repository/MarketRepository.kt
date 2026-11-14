@@ -536,6 +536,22 @@ class MarketRepository(
         val targetKlineTopic = topics.first()
         socketManager.subscribe(topics)
 
+        var lastEmittedCandle: Candle? = null
+        val emitLock = Any()
+        fun emitIfChanged(candle: Candle) {
+            val shouldEmit = synchronized(emitLock) {
+                if (lastEmittedCandle == candle) {
+                    false
+                } else {
+                    lastEmittedCandle = candle
+                    true
+                }
+            }
+            if (shouldEmit) {
+                trySend(candle)
+            }
+        }
+
         val klineJob = launch(Dispatchers.IO) {
             socketManager.klineUpdates.collect { update ->
                 if (!update.stream.equals(targetKlineTopic, ignoreCase = true)) return@collect
@@ -547,7 +563,7 @@ class MarketRepository(
                     cache[baseCandle.openTime] = baseCandle
                     aggregateIfNeeded(cache, baseCandle)
                 }
-                trySend(emittedCandle)
+                emitIfChanged(emittedCandle)
             }
         }
 
@@ -557,14 +573,12 @@ class MarketRepository(
                     val tick = updates.firstOrNull { it.symbol.equals(symbol, ignoreCase = true) } ?: return@collect
                     val price = tick.lastPrice ?: return@collect
                     if (price <= 0.0) return@collect
-                    // Always update live bar from ticker if kline stream hasn't updated in the last 1.2s
-                    // or if we've crossed into a new candle interval boundary.
                     val now = System.currentTimeMillis()
                     val msSinceKline = now - lastKlineWsMillis.get()
                     val cache = baseCandleCache[cacheKey]
                     val lastBaseCloseTime = cache?.let { synchronized(it) { it.values.lastOrNull()?.closeTime } } ?: 0L
                     if (msSinceKline > 1200L || now > lastBaseCloseTime) {
-                        trySend(applyTickToBaseCache(price))
+                        emitIfChanged(applyTickToBaseCache(price))
                     }
                 }
             } else {
@@ -575,7 +589,7 @@ class MarketRepository(
                     if (mode == MarketEndpointMode.BYBIT_LINEAR ||
                         System.currentTimeMillis() - lastKlineWsMillis.get() > 1500L
                     ) {
-                        trySend(applyTickToBaseCache(price))
+                        emitIfChanged(applyTickToBaseCache(price))
                     }
                 }
             }
@@ -602,7 +616,7 @@ class MarketRepository(
                                 tail?.let { aggregateIfNeeded(cache, it) }
                             }
                             if (latest != null) {
-                                trySend(latest)
+                                emitIfChanged(latest)
                             }
                         }
                     }

@@ -154,27 +154,33 @@ class BinanceSocketManager(
 
         webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                reconnectAttempt = 0
-                _connectionState.value = SocketConnectionState.CONNECTED
-                val activeStreams = synchronized(lock) { subscriptionCounts.keys.toList() }
+                val activeStreams = synchronized(lock) {
+                    if (this@BinanceSocketManager.webSocket !== webSocket || isIntentionallyClosed) {
+                        return
+                    }
+                    reconnectAttempt = 0
+                    _connectionState.value = SocketConnectionState.CONNECTED
+                    subscriptionCounts.keys.toList()
+                }
                 if (activeStreams.isNotEmpty()) {
                     sendCommand("SUBSCRIBE", activeStreams, webSocket)
                 }
                 heartbeatJob?.cancel()
                 if (isBybitSocket()) {
-                    val openedSocket = webSocket
                     heartbeatJob = scope.launch {
                         while (true) {
                             delay(20_000L)
-                            val isStillCurrent = synchronized(lock) { this@BinanceSocketManager.webSocket === openedSocket }
+                            val isStillCurrent = synchronized(lock) { this@BinanceSocketManager.webSocket === webSocket }
                             if (!isStillCurrent || !isBybitSocket()) break
-                            runCatching { openedSocket.send("""{"op":"ping"}""") }
+                            runCatching { webSocket.send("""{"op":"ping"}""") }
                         }
                     }
                 }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                val isCurrent = synchronized(lock) { this@BinanceSocketManager.webSocket === webSocket }
+                if (!isCurrent) return
                 runCatching {
                     if (isBybitSocket()) {
                         BybitPayloadParser.parseSocketMessage(
@@ -209,13 +215,16 @@ class BinanceSocketManager(
     }
 
     private fun handleDisconnect(closedSocket: WebSocket) {
-        heartbeatJob?.cancel()
-        val shouldReconnect = synchronized(lock) {
-            if (webSocket === closedSocket) {
-                webSocket = null
+        val (isCurrentSocket, shouldReconnect) = synchronized(lock) {
+            val isCurrent = webSocket === closedSocket
+            if (!isCurrent) {
+                return
             }
-            !isIntentionallyClosed && subscriptionCounts.isNotEmpty()
+            webSocket = null
+            true to (!isIntentionallyClosed && subscriptionCounts.isNotEmpty())
         }
+        if (!isCurrentSocket) return
+        heartbeatJob?.cancel()
         if (!shouldReconnect) {
             _connectionState.value = SocketConnectionState.DISCONNECTED
             return

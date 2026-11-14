@@ -167,29 +167,21 @@ fun ChartScreen(
             )
         }
 
-        // Main Full-Bleed Chart Viewport
+        // Main Full-Bleed Chart Viewport (single persistent WebView instance)
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
         ) {
-            ChartCanvas(
+            LightweightChartView(
                 state = state,
-                onPlotWidthChanged = viewModel::updatePlotWidth,
-                onPan = viewModel::panChart,
-                onPinchZoom = viewModel::pinchZoom,
-                onScalePriceAxis = viewModel::scalePriceAxis,
-                onResetPriceAutoFit = viewModel::resetPriceAutoFitOnly,
-                onPlotDoubleTap = viewModel::onPlotDoubleTap,
-                onDismissCrosshair = viewModel::clearCrosshair,
-                onScaleTimeAxis = viewModel::scaleTimeAxis,
-                onCrosshairMove = viewModel::updateCrosshair,
+                webUpdates = viewModel.webChartUpdates,
+                buildFullHistory = viewModel::buildCurrentFullHistoryUpdate,
                 onChartTap = viewModel::handleChartTap,
-                onMoveDrawingAnchor = viewModel::moveDrawingAnchor,
-                onMoveWholeDrawing = viewModel::moveWholeDrawing,
-                onMoveAlertPrice = viewModel::moveAlertPrice,
-                onPriceAxisTap = { price -> viewModel.setAxisQuickAlertPrice(price) },
-                onQuickAlertPlusClick = { price -> requestCreateAlert(price) }
+                onCrosshairMove = viewModel::updateCrosshair,
+                onQuickAlert = { price -> requestCreateAlert(price) },
+                onManualInteraction = viewModel::onChartManualInteraction,
+                modifier = Modifier.fillMaxSize()
             )
 
             // Side-mounted Floating Drawing Toolbar
@@ -306,12 +298,64 @@ fun ChartScreen(
                 )
             }
 
+            // Live Bar Countdown Pill (TradingView-style bar close timer)
+            if (!state.replayState.isActive && state.countdownMillis > 0L && state.candles.isNotEmpty()) {
+                val countdownLabel = ChartNumberFormatter.formatCountdown(state.countdownMillis)
+                if (countdownLabel.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 68.dp, bottom = 36.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(ElevatedSurface.copy(alpha = 0.92f))
+                            .border(0.75.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("chart_countdown_badge")
+                    ) {
+                        Text(
+                            text = countdownLabel,
+                            style = com.example.ui.theme.TabularMonoStyle.copy(
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = AmberGold
+                        )
+                    }
+                }
+            }
+
+            // Tapped-Price Quick Alert "+" Pill
+            val tappedPrice = state.axisQuickAlertPrice
+            if (tappedPrice != null && selectedDrawing == null && selectedAlert == null && !state.replayState.isActive) {
+                val precision = state.contract?.pricePrecision ?: 2
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 48.dp, end = 68.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(ElevatedSurface.copy(alpha = 0.95f))
+                        .border(0.75.dp, AmberGold.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
+                        .clickable { requestCreateAlert(tappedPrice) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .testTag("floating_plus_alert_button")
+                ) {
+                    Text(
+                        text = "+ Alert @ ${ChartNumberFormatter.formatPrice(tappedPrice, precision)}",
+                        style = com.example.ui.theme.TabularMonoStyle.copy(
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = AmberGold
+                    )
+                }
+            }
+
             // Price Reset Pill (appears whenever user manually zoomed/panned or switched timeframe)
             if (!state.viewport.isAutoFit && selectedDrawing == null && !state.replayState.isActive) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 80.dp, bottom = 36.dp)
+                        .padding(end = 136.dp, bottom = 36.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(ElevatedSurface.copy(alpha = 0.94f))
                         .border(0.75.dp, AmberGold.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
@@ -334,7 +378,7 @@ fun ChartScreen(
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(top = 10.dp, end = 80.dp)
+                        .padding(top = 10.dp, end = 68.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(ElevatedSurface.copy(alpha = 0.9f))
                         .border(0.75.dp, CyanInfo, RoundedCornerShape(8.dp))

@@ -31,9 +31,12 @@ import com.example.domain.model.WatchlistItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -49,6 +52,22 @@ import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+
+sealed interface ChartWebUpdate {
+    data class FullHistory(
+        val seriesKey: String,
+        val candles: List<Candle>,
+        val fit: Boolean
+    ) : ChartWebUpdate
+
+    data class LiveCandleDelta(
+        val seriesKey: String,
+        val candles: List<Candle>,
+        val totalCount: Int
+    ) : ChartWebUpdate
+
+    data object ResetScroll : ChartWebUpdate
+}
 
 data class CrosshairState(
     val isActive: Boolean = false,
@@ -144,6 +163,24 @@ class ChartViewModel(
 
     private val _drawingsForSymbol = MutableStateFlow<List<ChartDrawing>>(emptyList())
     private val _alertsForSymbol = MutableStateFlow<List<PriceAlert>>(emptyList())
+    private val _webChartUpdates = MutableSharedFlow<ChartWebUpdate>(extraBufferCapacity = 64)
+    val webChartUpdates: SharedFlow<ChartWebUpdate> = _webChartUpdates.asSharedFlow()
+
+    fun buildCurrentFullHistoryUpdate(): ChartWebUpdate.FullHistory? {
+        val list = uiState.value.displayedCandles
+        if (list.isEmpty()) return null
+        return ChartWebUpdate.FullHistory(
+            seriesKey = currentSeriesKey(),
+            candles = list,
+            fit = _viewport.value.isAutoFit
+        )
+    }
+
+    private fun currentSeriesKey(
+        symbol: String = _symbol.value,
+        timeframeId: String = _timeframeId.value,
+        priceSource: PriceSource = _priceSource.value
+    ): String = "${symbol}_${timeframeId}_${priceSource.name}"
 
     private data class CoreMarketSlice(
         val symbol: String,
@@ -411,6 +448,7 @@ class ChartViewModel(
             val contract = marketRepository.getContract(sym)
             val pair = contract?.pair ?: sym
 
+            val seriesKey = currentSeriesKey(sym, tfId, source)
             val cached = marketRepository.getCachedCandles(sym, source, tf)
             val isUninitializedRange = _viewport.value.priceMax <= _viewport.value.priceMin ||
                 (_viewport.value.priceMin == 0.0 && _viewport.value.priceMax == 100.0)
@@ -420,6 +458,15 @@ class ChartViewModel(
                 if (shouldAutoFitOnNextLoad || _viewport.value.isAutoFit || isUninitializedRange) {
                     autoFitIfNeeded(cached, force = isUninitializedRange)
                     shouldAutoFitOnNextLoad = false
+                }
+                if (!_replayState.value.isActive) {
+                    _webChartUpdates.tryEmit(
+                        ChartWebUpdate.FullHistory(
+                            seriesKey = seriesKey,
+                            candles = cached,
+                            fit = _viewport.value.isAutoFit
+                        )
+                    )
                 }
             } else {
                 _candles.value = emptyList()
@@ -442,6 +489,15 @@ class ChartViewModel(
                     autoFitIfNeeded(list, force = stillUninitialized)
                     shouldAutoFitOnNextLoad = false
                 }
+                if (!_replayState.value.isActive) {
+                    _webChartUpdates.tryEmit(
+                        ChartWebUpdate.FullHistory(
+                            seriesKey = seriesKey,
+                            candles = list,
+                            fit = _viewport.value.isAutoFit
+                        )
+                    )
+                }
             }.onFailure { err ->
                 if (_candles.value.isEmpty()) {
                     _errorMessage.value = err.localizedMessage ?: "Unable to load chart candles"
@@ -454,33 +510,76 @@ class ChartViewModel(
                 priceSource = source,
                 timeframe = tf
             ).collect { liveCandle ->
-                val updatedList = mergeCandle(_candles.value, liveCandle)
+                val (updatedList, deltaCandles, requiresFullSync) = mergeCandleWithDelta(_candles.value, liveCandle)
                 _candles.value = updatedList
                 if (_viewport.value.isAutoFit && !_replayState.value.isActive) {
                     autoFitIfNeeded(updatedList)
+                }
+                if (!_replayState.value.isActive) {
+                    if (requiresFullSync) {
+                        _webChartUpdates.tryEmit(
+                            ChartWebUpdate.FullHistory(
+                                seriesKey = seriesKey,
+                                candles = updatedList,
+                                fit = false
+                            )
+                        )
+                    } else if (deltaCandles.isNotEmpty()) {
+                        _webChartUpdates.tryEmit(
+                            ChartWebUpdate.LiveCandleDelta(
+                                seriesKey = seriesKey,
+                                candles = deltaCandles,
+                                totalCount = updatedList.size
+                            )
+                        )
+                    }
                 }
                 evaluateForegroundAlerts(sym, source, liveCandle)
             }
         }
     }
 
-    private fun mergeCandle(existing: List<Candle>, update: Candle): List<Candle> {
-        if (existing.isEmpty()) return listOf(update)
+    private data class CandleMergeResult(
+        val updatedList: List<Candle>,
+        val deltaCandles: List<Candle>,
+        val requiresFullSync: Boolean
+    )
+
+    private fun mergeCandleWithDelta(existing: List<Candle>, update: Candle): CandleMergeResult {
+        if (existing.isEmpty()) {
+            val single = listOf(update)
+            return CandleMergeResult(single, single, requiresFullSync = true)
+        }
         val last = existing.last()
         return when {
             update.openTime == last.openTime -> {
-                existing.dropLast(1) + update
+                if (last == update) {
+                    CandleMergeResult(existing, emptyList(), requiresFullSync = false)
+                } else {
+                    val next = existing.toMutableList().apply { set(lastIndex, update) }
+                    CandleMergeResult(next, listOf(update), requiresFullSync = false)
+                }
             }
             update.openTime > last.openTime -> {
                 val closedPrev = if (!last.isClosed) last.copy(isClosed = true) else last
-                existing.dropLast(1) + closedPrev + update
+                val next = existing.toMutableList().apply {
+                    set(lastIndex, closedPrev)
+                    add(update)
+                }
+                CandleMergeResult(next, listOf(closedPrev, update), requiresFullSync = false)
             }
             else -> {
                 val idx = existing.indexOfLast { it.openTime == update.openTime }
                 if (idx >= 0) {
-                    existing.toMutableList().apply { set(idx, update) }
+                    if (existing[idx] == update) {
+                        CandleMergeResult(existing, emptyList(), requiresFullSync = false)
+                    } else {
+                        val next = existing.toMutableList().apply { set(idx, update) }
+                        CandleMergeResult(next, listOf(update), requiresFullSync = true)
+                    }
                 } else {
-                    (existing + update).sortedBy { it.openTime }
+                    val next = (existing + update).sortedBy { it.openTime }
+                    CandleMergeResult(next, listOf(update), requiresFullSync = true)
                 }
             }
         }
@@ -539,6 +638,15 @@ class ChartViewModel(
                     hasReachedEarliestHistory = true
                 } else {
                     _candles.value = combined
+                    if (!_replayState.value.isActive && sym == _symbol.value && source == _priceSource.value) {
+                        _webChartUpdates.tryEmit(
+                            ChartWebUpdate.FullHistory(
+                                seriesKey = currentSeriesKey(sym, tf.id, source),
+                                candles = combined,
+                                fit = false
+                            )
+                        )
+                    }
                 }
             }
             _isPaginatingBack.value = false
@@ -672,6 +780,7 @@ class ChartViewModel(
         _viewport.update { vp ->
             applyAutoFitToViewport(vp.copy(isAutoFit = true, rightOffsetBars = 8f), candles, force = true)
         }
+        _webChartUpdates.tryEmit(ChartWebUpdate.ResetScroll)
         persistChartState()
     }
 
@@ -764,7 +873,15 @@ class ChartViewModel(
                 isPlaying = false,
                 speedMultiplier = 1
             )
-            autoFitIfNeeded(uiState.value.displayedCandles)
+            val replayed = uiState.value.displayedCandles
+            autoFitIfNeeded(replayed)
+            _webChartUpdates.tryEmit(
+                ChartWebUpdate.FullHistory(
+                    seriesKey = currentSeriesKey(),
+                    candles = replayed,
+                    fit = false
+                )
+            )
             return
         }
 
@@ -985,8 +1102,18 @@ class ChartViewModel(
                 isPlaying = if (shouldStop) false else state.isPlaying
             )
         }
+        val displayed = uiState.value.displayedCandles
         if (_viewport.value.isAutoFit) {
-            autoFitIfNeeded(uiState.value.displayedCandles)
+            autoFitIfNeeded(displayed)
+        }
+        if (displayed.isNotEmpty()) {
+            _webChartUpdates.tryEmit(
+                ChartWebUpdate.LiveCandleDelta(
+                    seriesKey = currentSeriesKey(),
+                    candles = listOf(displayed.last()),
+                    totalCount = displayed.size
+                )
+            )
         }
     }
 
@@ -1026,8 +1153,18 @@ class ChartViewModel(
     fun exitBarReplay() {
         replayJob?.cancel()
         _replayState.value = BarReplayState()
+        val full = _candles.value
         if (_viewport.value.isAutoFit) {
-            autoFitIfNeeded(_candles.value)
+            autoFitIfNeeded(full)
+        }
+        if (full.isNotEmpty()) {
+            _webChartUpdates.tryEmit(
+                ChartWebUpdate.FullHistory(
+                    seriesKey = currentSeriesKey(),
+                    candles = full,
+                    fit = _viewport.value.isAutoFit
+                )
+            )
         }
     }
 
