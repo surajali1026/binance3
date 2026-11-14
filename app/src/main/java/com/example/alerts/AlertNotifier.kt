@@ -9,7 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
-import android.media.RingtoneManager
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.Handler
+import android.os.Looper
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -20,7 +23,7 @@ import com.example.MainActivity
 import com.example.R
 
 object AlertNotifier {
-    const val CHANNEL_ALERTS = "binance_pro_price_alerts_alarm"
+    const val CHANNEL_ALERTS = "binance_pro_price_alerts_custom_v1"
     const val CHANNEL_SERVICE = "binance_pro_monitor_service"
     const val SERVICE_NOTIFICATION_ID = 9001
 
@@ -29,9 +32,6 @@ object AlertNotifier {
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-        val alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
 
         val audioAttrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ALARM)
@@ -46,7 +46,7 @@ object AlertNotifier {
             description = "Loud alerts for price levels, breakouts, and trendlines"
             enableVibration(true)
             vibrationPattern = this@AlertNotifier.vibrationPattern
-            setSound(alarmSound, audioAttrs)
+            setSound(null, null)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
 
@@ -125,13 +125,9 @@ object AlertNotifier {
             .setAutoCancel(true)
             .setContentIntent(tapIntent)
 
-        if (loudSoundEnabled) {
-            val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            builder.setSound(alarmUri)
-        } else {
-            builder.setSilent(true)
-        }
+        // Play the app's own alert sequence; suppress the device's default notification sound.
+        builder.setSilent(true)
+        if (loudSoundEnabled) playCustomAlertTone()
 
         if (vibrationEnabled) {
             builder.setVibrate(vibrationPattern)
@@ -141,6 +137,18 @@ object AlertNotifier {
         manager.notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), builder.build())
     }
 
+    /** Plays a distinctive rising double-beep instead of the phone default ringtone. */
+    private fun playCustomAlertTone() {
+        runCatching {
+            val tone = ToneGenerator(AudioManager.STREAM_ALARM, 100)
+            val handler = Handler(Looper.getMainLooper())
+            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
+            handler.postDelayed({
+                tone.startTone(ToneGenerator.TONE_PROP_ACK, 320)
+                handler.postDelayed({ tone.release() }, 420L)
+            }, 230L)
+        }
+    }
     @Suppress("DEPRECATION")
     private fun triggerVibration(context: Context) {
         runCatching {
