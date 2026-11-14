@@ -3,6 +3,8 @@ package com.example.ui.chart
 import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
+import android.os.Handler
+import android.os.Looper
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -15,7 +17,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
-import com.example.domain.model.ChartUiState
 import com.example.domain.model.DrawingType
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,13 +27,18 @@ private class ChartJavascriptBridge(
     var onCrosshair: (Long, Double) -> Unit,
     var onQuickAlert: (Double) -> Unit
 ) {
+    private val mainHandler = Handler(Looper.getMainLooper())
     @JavascriptInterface fun onChartTap(timeSeconds: Double, price: Double) {
-        onTap((timeSeconds * 1000.0).toLong(), price)
+        val time = (timeSeconds * 1000.0).toLong()
+        mainHandler.post { onTap(time, price) }
     }
     @JavascriptInterface fun onCrosshair(timeSeconds: Double, price: Double) {
-        onCrosshair((timeSeconds * 1000.0).toLong(), price)
+        val time = (timeSeconds * 1000.0).toLong()
+        mainHandler.post { onCrosshair(time, price) }
     }
-    @JavascriptInterface fun onQuickAlert(price: Double) { onQuickAlert(price) }
+    @JavascriptInterface fun onQuickAlert(price: Double) {
+        mainHandler.post { onQuickAlert(price) }
+    }
     @JavascriptInterface fun onReady() = Unit
     @JavascriptInterface fun onError(message: String) = Unit
 }
