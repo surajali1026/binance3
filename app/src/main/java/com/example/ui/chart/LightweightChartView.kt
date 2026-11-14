@@ -43,7 +43,7 @@ private class ChartJavascriptBridge(
     @JavascriptInterface fun onError(message: String) = Unit
 }
 
-@SuppressLint("SetJavaScriptEnabled")
+@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 @Composable
 fun LightweightChartView(
     state: ChartUiState,
