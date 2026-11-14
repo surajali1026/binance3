@@ -95,11 +95,11 @@ data class ChartUiState(
         }
 
     val currentPrice: Double?
-        get() = displayedCandles.lastOrNull()?.close ?: when (priceSource) {
+        get() = when (priceSource) {
             PriceSource.LAST -> ticker?.lastPrice
             PriceSource.MARK -> ticker?.markPrice
             PriceSource.INDEX -> ticker?.indexPrice
-        }
+        }?.takeIf { it.isFinite() && it > 0.0 } ?: displayedCandles.lastOrNull()?.close
 }
 
 class ChartViewModel(
