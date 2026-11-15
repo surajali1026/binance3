@@ -461,20 +461,7 @@ fun LightweightChartView(
                 }
             }
             put("priceLines", pArr)
-            val zArr = JSONArray()
-            if (state.preferences.showTbtSmc && state.preferences.tbtShowZones) {
-                state.tbtSmc.zones.forEach { z ->
-                    zArr.put(JSONObject().apply {
-                        put("type", z.type.name)
-                        put("startTime", z.startTimeMillis / 1000L)
-                        put("top", z.top)
-                        put("bottom", z.bottom)
-                        put("tapped", z.tapped)
-                        put("label", z.label)
-                    })
-                }
-            }
-            put("zones", zArr)
+            put("zones", JSONArray())
         }
         root.put("tbtSmc", tbtObj)
         root.toString()

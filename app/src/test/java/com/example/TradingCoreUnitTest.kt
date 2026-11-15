@@ -559,7 +559,8 @@ class TradingCoreUnitTest {
                 showPowerShift = false,
                 showOverlap = false,
                 showSignals = false,
-                showTradeSetup = false
+                showTradeSetup = false,
+                showVolumeProfile = false
             )
         )
         assertTrue(filteredOut.priceLines.isEmpty())
@@ -676,7 +677,8 @@ class TradingCoreUnitTest {
         assertEquals(3, buyOut.summary.mtfBiases.size)
         assertTrue(buyOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_ENTRY })
         assertTrue(buyOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_SL })
-        assertTrue(buyOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_TP })
+        assertTrue(buyOut.priceLines.none { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_TP })
+        assertTrue(buyOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.VOLUME_PROFILE })
 
         // Bearish MTF alignment: steady downtrend on 1H & 4H + LTF RBD supply + tap + drop
         val ltfBear = mutableListOf<Candle>()
@@ -720,5 +722,72 @@ class TradingCoreUnitTest {
         assertTrue(sellSetup.takeProfit1 > sellSetup.takeProfit2)
         assertTrue(sellSetup.takeProfit2 > 0.0)
         assertTrue(sellSetup.riskReward1 >= 1.5)
+    }
+
+    @Test
+    fun `tbt smc binance futures and spot volume profile identifies retracement entry and respects toggle`() {
+        val baseTime = 1_750_000_000_000L
+        val ltfStep = 900_000L
+        fun bar(idx: Int, o: Double, h: Double, l: Double, c: Double, vol: Double) = Candle(
+            openTime = baseTime + idx * ltfStep,
+            closeTime = baseTime + idx * ltfStep + ltfStep - 1L,
+            open = o,
+            high = h,
+            low = l,
+            close = c,
+            volume = vol,
+            isClosed = true
+        )
+
+        val ltf = mutableListOf<Candle>()
+        val spot = mutableListOf<Candle>()
+        for (i in 0..15) {
+            val c = if (i % 2 == 0) 100.6 else 99.4
+            ltf.add(bar(i, 100.0, 101.0, 99.0, c, 500.0))
+            spot.add(bar(i, 100.0, 101.0, 99.0, c, 450.0))
+        }
+        // DBR Demand base + tap with massive institutional volume concentrated near 101.0 - 102.0
+        ltf.add(bar(16, 100.0, 100.2, 99.5, 99.8, 1200.0))
+        ltf.add(bar(17, 100.1, 104.3, 100.1, 104.3, 4500.0))
+        ltf.add(bar(18, 104.0, 104.4, 103.0, 103.5, 800.0))
+        ltf.add(bar(19, 103.5, 103.8, 102.0, 102.2, 900.0))
+        // High-volume retracement & demand tap cluster around 101.2
+        ltf.add(bar(20, 102.0, 102.2, 99.6, 101.0, 18000.0))
+        spot.add(bar(16, 100.0, 100.2, 99.5, 99.8, 1000.0))
+        spot.add(bar(17, 100.1, 104.3, 100.1, 104.3, 4200.0))
+        spot.add(bar(18, 104.0, 104.4, 103.0, 103.5, 700.0))
+        spot.add(bar(19, 103.5, 103.8, 102.0, 102.2, 850.0))
+        spot.add(bar(20, 102.0, 102.2, 99.6, 101.0, 22000.0))
+
+        ltf.add(bar(21, 101.5, 102.0, 100.5, 100.6, 12000.0))
+        ltf.add(bar(22, 100.6, 101.5, 100.1, 101.2, 14000.0))
+        ltf.add(bar(23, 101.3, 105.5, 101.3, 105.0, 9000.0))
+        ltf.add(bar(24, 105.0, 108.0, 104.8, 107.8, 1500.0))
+        ltf.add(bar(25, 107.8, 110.0, 107.5, 109.5, 1400.0))
+
+        spot.add(bar(21, 101.5, 102.0, 100.5, 100.6, 10000.0))
+        spot.add(bar(22, 100.6, 101.5, 100.1, 101.2, 11000.0))
+        spot.add(bar(23, 101.3, 105.5, 101.3, 105.0, 7000.0))
+        spot.add(bar(24, 105.0, 108.0, 104.8, 107.8, 1300.0))
+        spot.add(bar(25, 107.8, 110.0, 107.5, 109.5, 1200.0))
+
+        val withVp = com.example.domain.indicator.TbtSmcEngine.calculate(
+            candles = ltf,
+            config = com.example.domain.indicator.TbtSmcConfig(showVolumeProfile = true),
+            mtfInput = com.example.domain.indicator.TbtMtfInput(spotCandles = spot)
+        )
+        assertEquals("Futures+Spot", withVp.summary.volumeSourcesLabel)
+        val retrace = withVp.summary.tradeSetup.volumeRetraceEntry
+        assertNotNull(retrace)
+        assertTrue(retrace!! >= withVp.summary.tradeSetup.stopLoss)
+        assertTrue(retrace <= ltf.last().close)
+        assertTrue(withVp.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.VOLUME_PROFILE })
+
+        val hiddenVp = com.example.domain.indicator.TbtSmcEngine.calculate(
+            candles = ltf,
+            config = com.example.domain.indicator.TbtSmcConfig(showVolumeProfile = false),
+            mtfInput = com.example.domain.indicator.TbtMtfInput(spotCandles = spot)
+        )
+        assertTrue(hiddenVp.priceLines.none { it.category == com.example.domain.indicator.TbtPriceLineCategory.VOLUME_PROFILE })
     }
 }

@@ -167,6 +167,7 @@ fun ChartScreen(
                 onToggleTbtHud = viewModel::toggleTbtHud,
                 onToggleTbtTradeSetup = viewModel::toggleTbtTradeSetup,
                 onToggleTbtMtf = viewModel::toggleTbtMultiTimeframe,
+                onToggleTbtVolumeProfile = viewModel::toggleTbtVolumeProfile,
                 onExitFullScreen = {
                     if (state.isFullScreen) {
                         viewModel.toggleFullScreen()
@@ -203,7 +204,8 @@ fun ChartScreen(
                 onToggleTbtSignals = viewModel::toggleTbtSignals,
                 onToggleTbtHud = viewModel::toggleTbtHud,
                 onToggleTbtTradeSetup = viewModel::toggleTbtTradeSetup,
-                onToggleTbtMtf = viewModel::toggleTbtMultiTimeframe
+                onToggleTbtMtf = viewModel::toggleTbtMultiTimeframe,
+                onToggleTbtVolumeProfile = viewModel::toggleTbtVolumeProfile
             )
         }
 
@@ -276,6 +278,7 @@ fun ChartScreen(
                     summary = state.tbtSmc.summary,
                     precision = state.contract?.pricePrecision ?: 2,
                     showTradeSetup = state.preferences.tbtShowTradeSetup,
+                    showVolumeProfile = state.preferences.tbtShowVolumeProfile,
                     onQuickCreateAlert = { price -> requestCreateAlert(price) },
                     modifier = Modifier
                         .align(Alignment.TopEnd)

@@ -465,7 +465,8 @@ fun ChartTimeframeStrip(
     onToggleTbtSignals: () -> Unit = {},
     onToggleTbtHud: () -> Unit = {},
     onToggleTbtTradeSetup: () -> Unit = {},
-    onToggleTbtMtf: () -> Unit = {}
+    onToggleTbtMtf: () -> Unit = {},
+    onToggleTbtVolumeProfile: () -> Unit = {}
 ) {
     Row(
         modifier = Modifier
@@ -546,7 +547,8 @@ fun ChartTimeframeStrip(
             onToggleSignals = onToggleTbtSignals,
             onToggleHud = onToggleTbtHud,
             onToggleTradeSetup = onToggleTbtTradeSetup,
-            onToggleMtf = onToggleTbtMtf
+            onToggleMtf = onToggleTbtMtf,
+            onToggleVolumeProfile = onToggleTbtVolumeProfile
         )
 
         Spacer(modifier = Modifier.width(2.dp))
@@ -597,6 +599,7 @@ fun TbtSmcControls(
     onToggleHud: () -> Unit,
     onToggleTradeSetup: () -> Unit = {},
     onToggleMtf: () -> Unit = {},
+    onToggleVolumeProfile: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var settingsExpanded by remember { mutableStateOf(false) }
@@ -699,10 +702,16 @@ fun TbtSmcControls(
                 onClick = onToggleSignals
             )
             TbtLayerMenuItem(
-                label = "Buy/Sell + TP/SL",
+                label = "Buy/Sell + SL",
                 checked = config.showTradeSetup,
                 testTag = "tbt_layer_trade_setup",
                 onClick = onToggleTradeSetup
+            )
+            TbtLayerMenuItem(
+                label = "Volume Profile (HVN)",
+                checked = config.showVolumeProfile,
+                testTag = "tbt_layer_volume_profile",
+                onClick = onToggleVolumeProfile
             )
             TbtLayerMenuItem(
                 label = "Multi-Timeframe (MTF)",
@@ -762,6 +771,7 @@ fun TbtConditionHudBadge(
     summary: TbtConditionSummary,
     precision: Int,
     showTradeSetup: Boolean = true,
+    showVolumeProfile: Boolean = true,
     onQuickCreateAlert: ((Double) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -906,6 +916,7 @@ fun TbtConditionHudBadge(
                 }
             }
 
+            val volEntryPrice = setup.volumeRetraceEntry ?: summary.volumePocPrice
             if (setup.direction != TbtTradeDirection.WAIT) {
                 Column(
                     modifier = Modifier
@@ -933,23 +944,50 @@ fun TbtConditionHudBadge(
                             maxLines = 1
                         )
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "TP1 ${ChartNumberFormatter.formatPrice(setup.takeProfit1, precision)} (${String.format(java.util.Locale.US, "%.1f", setup.riskReward1)}R)",
-                            style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold),
-                            color = BullishGreen,
-                            maxLines = 1
-                        )
-                        Text(
-                            text = "TP2 ${ChartNumberFormatter.formatPrice(setup.takeProfit2, precision)}",
-                            style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold),
-                            color = Color(0xFF1DE9B6),
-                            maxLines = 1
-                        )
+                    if (showVolumeProfile && volEntryPrice != null) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "VOL ${ChartNumberFormatter.formatPrice(volEntryPrice, precision)}",
+                                style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.Bold),
+                                color = Color(0xFFB388FF),
+                                maxLines = 1
+                            )
+                            Text(
+                                text = summary.volumeSourcesLabel,
+                                style = TabularMonoStyle.copy(fontSize = 7.5.sp, fontWeight = FontWeight.Medium),
+                                color = TextMuted,
+                                maxLines = 1
+                            )
+                        }
                     }
+                }
+            } else if (showVolumeProfile && summary.volumePocPrice != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(CanvasVoid.copy(alpha = 0.65f))
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                        .testTag("tbt_volume_poc_row"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "VOL ${ChartNumberFormatter.formatPrice(summary.volumePocPrice, precision)}",
+                        style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.Bold),
+                        color = Color(0xFFB388FF),
+                        maxLines = 1
+                    )
+                    Text(
+                        text = summary.volumeSourcesLabel,
+                        style = TabularMonoStyle.copy(fontSize = 7.5.sp, fontWeight = FontWeight.Medium),
+                        color = TextMuted,
+                        maxLines = 1
+                    )
                 }
             }
         }
@@ -999,6 +1037,17 @@ fun TbtConditionHudBadge(
                     fontSize = 8.5.sp,
                     fontWeight = FontWeight.SemiBold
                 )
+                if (showVolumeProfile && summary.volumeImbalanceLabel.isNotBlank()) {
+                    Text(
+                        text = summary.volumeImbalanceLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFB388FF),
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 if (setup.direction != TbtTradeDirection.WAIT) {
                     Text(
                         text = "SL: ${setup.slReason}",
@@ -1008,14 +1057,16 @@ fun TbtConditionHudBadge(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        text = "TP1: ${setup.tp1Reason} | TP2: ${setup.tp2Reason}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted,
-                        fontSize = 8.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (showVolumeProfile && setup.volumeProfileReason.isNotBlank()) {
+                        Text(
+                            text = "Retrace: ${setup.volumeProfileReason}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted,
+                            fontSize = 8.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
                 setup.confluenceReasons.forEach { reason ->
                     Text(
@@ -1027,16 +1078,23 @@ fun TbtConditionHudBadge(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                if (onQuickCreateAlert != null && setup.direction != TbtTradeDirection.WAIT) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 3.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        TbtAlertShortcutChip("Alert EN", CyanInfo) { onQuickCreateAlert(setup.entryPrice) }
-                        TbtAlertShortcutChip("Alert SL", BearishRed) { onQuickCreateAlert(setup.stopLoss) }
-                        TbtAlertShortcutChip("Alert TP1", BullishGreen) { onQuickCreateAlert(setup.takeProfit1) }
+                if (onQuickCreateAlert != null) {
+                    val volTarget = setup.volumeRetraceEntry ?: summary.volumePocPrice
+                    if (setup.direction != TbtTradeDirection.WAIT || (showVolumeProfile && volTarget != null)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (setup.direction != TbtTradeDirection.WAIT) {
+                                TbtAlertShortcutChip("Alert EN", CyanInfo) { onQuickCreateAlert(setup.entryPrice) }
+                                TbtAlertShortcutChip("Alert SL", BearishRed) { onQuickCreateAlert(setup.stopLoss) }
+                            }
+                            if (showVolumeProfile && volTarget != null) {
+                                TbtAlertShortcutChip("Alert VOL", Color(0xFFB388FF)) { onQuickCreateAlert(volTarget) }
+                            }
+                        }
                     }
                 }
             }
@@ -1435,6 +1493,7 @@ fun FullScreenTimeframeBar(
     onToggleTbtHud: () -> Unit = {},
     onToggleTbtTradeSetup: () -> Unit = {},
     onToggleTbtMtf: () -> Unit = {},
+    onToggleTbtVolumeProfile: () -> Unit = {},
     onExitFullScreen: () -> Unit,
     showBackToWatchlist: Boolean = false,
     onBackToWatchlist: () -> Unit = {},
@@ -1542,6 +1601,7 @@ fun FullScreenTimeframeBar(
                     onToggleHud = onToggleTbtHud,
                     onToggleTradeSetup = onToggleTbtTradeSetup,
                     onToggleMtf = onToggleTbtMtf,
+                    onToggleVolumeProfile = onToggleTbtVolumeProfile,
                     modifier = Modifier.padding(end = 3.dp)
                 )
             }
@@ -1786,7 +1846,8 @@ fun FullScreenTimeframeBar(
                         onToggleSignals = onToggleTbtSignals,
                         onToggleHud = onToggleTbtHud,
                         onToggleTradeSetup = onToggleTbtTradeSetup,
-                        onToggleMtf = onToggleTbtMtf
+                        onToggleMtf = onToggleTbtMtf,
+                        onToggleVolumeProfile = onToggleTbtVolumeProfile
                     )
                 }
             }

@@ -489,33 +489,8 @@ fun ChartCanvas(
                         }
                     }
 
-                    // 2b. TBT SMC Zones, Price Lines & Markers (fallback Canvas rendering)
+                    // 2b. TBT SMC Price Lines & Markers (fallback Canvas rendering — no Supply/Demand zone rectangles)
                     if (state.preferences.showTbtSmc) {
-                        if (state.preferences.tbtShowZones) {
-                            state.tbtSmc.zones.forEach { zone ->
-                                val zx = mapper.timeToX(zone.startTimeMillis).coerceIn(0f, width)
-                                val yTop = mapper.priceToY(zone.top)
-                                val yBot = mapper.priceToY(zone.bottom)
-                                val rectTop = min(yTop, yBot)
-                                val rectH = abs(yBot - yTop).coerceAtLeast(2f)
-                                val rectW = (width - zx).coerceAtLeast(4f)
-                                val fillColor = when (zone.type) {
-                                    com.example.domain.indicator.TbtZoneType.DEMAND ->
-                                        Color(0xFF00C853).copy(alpha = if (zone.tapped) 0.08f else 0.14f)
-                                    com.example.domain.indicator.TbtZoneType.SUPPLY ->
-                                        Color(0xFFFF1744).copy(alpha = if (zone.tapped) 0.08f else 0.14f)
-                                    com.example.domain.indicator.TbtZoneType.FVG_BULL ->
-                                        Color(0xFF00E5FF).copy(alpha = 0.08f)
-                                    com.example.domain.indicator.TbtZoneType.FVG_BEAR ->
-                                        Color(0xFFFF9100).copy(alpha = 0.08f)
-                                }
-                                drawRect(
-                                    color = fillColor,
-                                    topLeft = Offset(zx, rectTop),
-                                    size = Size(rectW, rectH)
-                                )
-                            }
-                        }
                         state.tbtSmc.priceLines.forEach { pl ->
                             val py = mapper.priceToY(pl.price)
                             if (py in -10f..(height + 10f)) {

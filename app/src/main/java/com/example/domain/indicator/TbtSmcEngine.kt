@@ -28,6 +28,7 @@ enum class TbtPriceLineCategory {
     HTF_ZONE,
     POWER_SHIFT,
     OVERLAP,
+    VOLUME_PROFILE,
     TRADE_ENTRY,
     TRADE_SL,
     TRADE_TP
@@ -82,6 +83,8 @@ data class TbtTradeSetup(
     val takeProfit2: Double = 0.0,
     val riskReward1: Double = 0.0,
     val riskReward2: Double = 0.0,
+    val volumeRetraceEntry: Double? = null,
+    val volumeProfileReason: String = "",
     val slReason: String = "",
     val tp1Reason: String = "",
     val tp2Reason: String = "",
@@ -96,6 +99,9 @@ data class TbtConditionSummary(
     val mtfBiases: List<TbtTimeframeBiasInfo> = emptyList(),
     val mtfAlignmentLabel: String = "Single TF",
     val dealingZoneLabel: String = "Equilibrium",
+    val volumePocPrice: Double? = null,
+    val volumeImbalanceLabel: String = "",
+    val volumeSourcesLabel: String = "Futures",
     val tradeSetup: TbtTradeSetup = TbtTradeSetup()
 )
 
@@ -107,7 +113,8 @@ data class TbtSmcConfig(
     val showSignals: Boolean = true,
     val showHud: Boolean = true,
     val showTradeSetup: Boolean = true,
-    val useMultiTimeframe: Boolean = true
+    val useMultiTimeframe: Boolean = true,
+    val showVolumeProfile: Boolean = true
 )
 
 data class TbtMtfInput(
@@ -115,7 +122,8 @@ data class TbtMtfInput(
     val htfLabel: String = "1H",
     val htfCandles: List<Candle> = emptyList(),
     val macroLabel: String = "4H",
-    val macroCandles: List<Candle> = emptyList()
+    val macroCandles: List<Candle> = emptyList(),
+    val spotCandles: List<Candle> = emptyList()
 )
 
 data class TbtSmcOutput(
@@ -289,6 +297,12 @@ object TbtSmcEngine {
             hasMtf = htfAnalysis != null || macroAnalysis != null
         )
 
+        val volumeProfile = analyzeVolumeProfile(
+            candles = candles,
+            spotCandles = mtfInput?.spotCandles.orEmpty(),
+            spotPrice = spot
+        )
+
         val tradeSetup = buildTradeSetup(
             candles = candles,
             ltf = ltf,
@@ -296,7 +310,8 @@ object TbtSmcEngine {
             htf = htfAnalysis,
             macroLabel = mtfInput?.macroLabel ?: "Macro",
             macro = macroAnalysis,
-            dealingZoneLabel = dealingZoneLabel
+            dealingZoneLabel = dealingZoneLabel,
+            volumeProfile = volumeProfile
         )
 
         // Assemble PriceLines
@@ -410,6 +425,30 @@ object TbtSmcEngine {
             }
         }
 
+        if (config.showVolumeProfile) {
+            val vpLinePrice = when (tradeSetup.direction) {
+                TbtTradeDirection.BUY, TbtTradeDirection.SELL -> tradeSetup.volumeRetraceEntry ?: volumeProfile.pocPrice
+                TbtTradeDirection.WAIT -> volumeProfile.pocPrice
+            }
+            if (vpLinePrice != null && vpLinePrice.isFinite() && vpLinePrice > 0.0) {
+                val vpTitle = when (tradeSetup.direction) {
+                    TbtTradeDirection.BUY -> "VP Retrace BUY"
+                    TbtTradeDirection.SELL -> "VP Retrace SELL"
+                    TbtTradeDirection.WAIT -> "VP Big Vol (${volumeProfile.sourcesLabel})"
+                }
+                priceLines.add(
+                    TbtPriceLine(
+                        price = vpLinePrice,
+                        title = vpTitle,
+                        colorHex = "#b388ff",
+                        lineStyle = 0,
+                        lineWidth = 2,
+                        category = TbtPriceLineCategory.VOLUME_PROFILE
+                    )
+                )
+            }
+        }
+
         if (config.showTradeSetup && tradeSetup.direction != TbtTradeDirection.WAIT) {
             val isBuy = tradeSetup.direction == TbtTradeDirection.BUY
             priceLines.add(
@@ -432,26 +471,6 @@ object TbtSmcEngine {
                     category = TbtPriceLineCategory.TRADE_SL
                 )
             )
-            priceLines.add(
-                TbtPriceLine(
-                    price = tradeSetup.takeProfit1,
-                    title = "TP1 (1:${formatRr(tradeSetup.riskReward1)})",
-                    colorHex = "#00e676",
-                    lineStyle = 2,
-                    lineWidth = 2,
-                    category = TbtPriceLineCategory.TRADE_TP
-                )
-            )
-            priceLines.add(
-                TbtPriceLine(
-                    price = tradeSetup.takeProfit2,
-                    title = "TP2 (1:${formatRr(tradeSetup.riskReward2)})",
-                    colorHex = "#1de9b6",
-                    lineStyle = 1,
-                    lineWidth = 1,
-                    category = TbtPriceLineCategory.TRADE_TP
-                )
-            )
         }
 
         // Combined overall bias: respects LTF and MTF consensus
@@ -461,7 +480,7 @@ object TbtSmcEngine {
             else -> ltf.bias
         }
 
-        // Zones exposed for translucent shading on chart (recent LTF Demand/Supply + FVG + HTF POI)
+        // Zones exposed for internal POI logic (not rendered as red/green rectangles on chart)
         val exposedZones = buildList {
             addAll(recentLtfZones)
             addAll(ltf.activeZones.filter { it.type == TbtZoneType.FVG_BULL || it.type == TbtZoneType.FVG_BEAR }.takeLast(3))
@@ -479,6 +498,9 @@ object TbtSmcEngine {
                 mtfBiases = mtfBiases,
                 mtfAlignmentLabel = mtfAlignmentLabel,
                 dealingZoneLabel = dealingZoneLabel,
+                volumePocPrice = volumeProfile.pocPrice,
+                volumeImbalanceLabel = tradeSetup.volumeProfileReason.ifBlank { volumeProfile.pocSummary },
+                volumeSourcesLabel = volumeProfile.sourcesLabel,
                 tradeSetup = tradeSetup
             )
         )
@@ -978,6 +1000,166 @@ object TbtSmcEngine {
         }
     }
 
+    private data class VolumeProfileBin(
+        val midPrice: Double,
+        val totalVol: Double,
+        val buyVol: Double,
+        val sellVol: Double
+    )
+
+    private data class VolumeProfileAnalysis(
+        val bins: List<VolumeProfileBin>,
+        val pocPrice: Double?,
+        val pocMultiplier: Double,
+        val sourcesLabel: String,
+        val pocSummary: String
+    ) {
+        fun findRetracementNode(
+            isBuy: Boolean,
+            spot: Double,
+            sl: Double,
+            zoneLow: Double?,
+            zoneHigh: Double?
+        ): Pair<Double?, String> {
+            if (bins.isEmpty()) return null to ""
+            val avgVol = bins.map { it.totalVol }.average().coerceAtLeast(1e-9)
+
+            // Search directional retracement range:
+            // BUY -> below/at spot and safely above SL
+            // SELL -> above/at spot and safely below SL
+            val directionalBins = if (isBuy) {
+                bins.filter { it.midPrice <= spot * 1.0005 && it.midPrice >= sl * 1.0005 }
+            } else {
+                bins.filter { it.midPrice >= spot * 0.9995 && it.midPrice <= sl * 0.9995 }
+            }
+            val candidates = directionalBins.ifEmpty {
+                if (isBuy) bins.filter { it.midPrice <= spot } else bins.filter { it.midPrice >= spot }
+            }.ifEmpty { bins }
+
+            val best = candidates.maxByOrNull { bin ->
+                val inPoiBonus = if (zoneLow != null && zoneHigh != null && bin.midPrice in zoneLow..zoneHigh) 1.35 else 1.0
+                val delta = if (isBuy) (bin.buyVol - bin.sellVol) else (bin.sellVol - bin.buyVol)
+                val imbalanceFactor = 1.0 + (delta / bin.totalVol.coerceAtLeast(1e-9)).coerceAtLeast(0.0) * 0.65
+                bin.totalVol * inPoiBonus * imbalanceFactor
+            } ?: return pocPrice to pocSummary
+
+            val ratio = (best.totalVol / avgVol).coerceAtLeast(1.0)
+            val ratioRounded = kotlin.math.round(ratio * 10.0) / 10.0
+            val dirTag = if (isBuy) {
+                if (best.buyVol > best.sellVol * 1.1) "Bull Imbalance" else "Big Vol HVN"
+            } else {
+                if (best.sellVol > best.buyVol * 1.1) "Bear Imbalance" else "Big Vol HVN"
+            }
+            val zoneTag = if (zoneLow != null && zoneHigh != null && best.midPrice in zoneLow..zoneHigh) " @ POI" else ""
+            return best.midPrice to "$sourcesLabel ${ratioRounded}x Vol • $dirTag$zoneTag"
+        }
+    }
+
+    private fun analyzeVolumeProfile(
+        candles: List<Candle>,
+        spotCandles: List<Candle>,
+        spotPrice: Double
+    ): VolumeProfileAnalysis {
+        if (candles.isEmpty() || !spotPrice.isFinite() || spotPrice <= 0.0) {
+            return VolumeProfileAnalysis(emptyList(), null, 1.0, "Futures", "")
+        }
+
+        val window = candles.takeLast(min(candles.size, 84))
+        val spotByTime = if (spotCandles.isNotEmpty()) {
+            val sampleSpot = spotCandles.last().close
+            // Only blend Binance Spot volume when price scale matches (exclude 1000PEPE vs PEPE mismatch)
+            if (sampleSpot > 0.0 && abs(sampleSpot - spotPrice) / spotPrice < 0.06) {
+                spotCandles.associateBy { it.openTime }
+            } else emptyMap()
+        } else emptyMap()
+
+        var matchedSpotBars = 0
+        var rangeLow = Double.MAX_VALUE
+        var rangeHigh = Double.MIN_VALUE
+        for (c in window) {
+            if (c.low < rangeLow) rangeLow = c.low
+            if (c.high > rangeHigh) rangeHigh = c.high
+        }
+        val span = (rangeHigh - rangeLow)
+        if (!span.isFinite() || span <= 0.0) {
+            val volSources = if (spotByTime.isNotEmpty()) "Futures+Spot" else "Futures"
+            return VolumeProfileAnalysis(emptyList(), spotPrice, 1.0, volSources, "$volSources Flat Range")
+        }
+
+        val numBins = 32
+        val step = span / numBins.toDouble()
+        val totalArr = DoubleArray(numBins)
+        val buyArr = DoubleArray(numBins)
+        val sellArr = DoubleArray(numBins)
+
+        for (c in window) {
+            val spotBar = spotByTime[c.openTime]
+            if (spotBar != null) matchedSpotBars++
+            val barVol = c.volume.coerceAtLeast(0.0) + (spotBar?.volume?.coerceAtLeast(0.0) ?: 0.0)
+            if (barVol <= 0.0) continue
+
+            val barSpan = (c.high - c.low)
+            val buyRatio = if (barSpan > 0.0) {
+                ((c.close - c.low) / barSpan).coerceIn(0.12, 0.88)
+            } else if (c.close >= c.open) 0.72 else 0.28
+            val barBuy = barVol * buyRatio
+            val barSell = barVol - barBuy
+
+            val startBin = ((c.low - rangeLow) / step).toInt().coerceIn(0, numBins - 1)
+            val endBin = ((c.high - rangeLow) / step).toInt().coerceIn(startBin, numBins - 1)
+            val bodyLow = min(c.open, c.close)
+            val bodyHigh = max(c.open, c.close)
+
+            var weightSum = 0.0
+            val weights = DoubleArray(endBin - startBin + 1)
+            for (b in startBin..endBin) {
+                val binMid = rangeLow + (b + 0.5) * step
+                val w = if (binMid in bodyLow..bodyHigh) 2.0 else 0.75
+                weights[b - startBin] = w
+                weightSum += w
+            }
+            if (weightSum <= 0.0) weightSum = 1.0
+            for (b in startBin..endBin) {
+                val frac = weights[b - startBin] / weightSum
+                totalArr[b] += barVol * frac
+                buyArr[b] += barBuy * frac
+                sellArr[b] += barSell * frac
+            }
+        }
+
+        val bins = buildList {
+            for (b in 0 until numBins) {
+                if (totalArr[b] > 0.0) {
+                    add(
+                        VolumeProfileBin(
+                            midPrice = rangeLow + (b + 0.5) * step,
+                            totalVol = totalArr[b],
+                            buyVol = buyArr[b],
+                            sellVol = sellArr[b]
+                        )
+                    )
+                }
+            }
+        }
+        val pocBin = bins.maxByOrNull { it.totalVol }
+        val meanVol = bins.takeIf { it.isNotEmpty() }?.map { it.totalVol }?.average()?.coerceAtLeast(1e-9) ?: 1.0
+        val pocMult = if (pocBin != null) (pocBin.totalVol / meanVol).coerceAtLeast(1.0) else 1.0
+        val multRounded = kotlin.math.round(pocMult * 10.0) / 10.0
+        val sourcesLabel = if (matchedSpotBars >= 10) "Futures+Spot" else "Futures"
+        val pocSummary = if (pocBin != null) {
+            val dom = if (pocBin.buyVol >= pocBin.sellVol) "Bull Vol POC" else "Bear Vol POC"
+            "$sourcesLabel ${multRounded}x Avg • $dom"
+        } else ""
+
+        return VolumeProfileAnalysis(
+            bins = bins,
+            pocPrice = pocBin?.midPrice,
+            pocMultiplier = pocMult,
+            sourcesLabel = sourcesLabel,
+            pocSummary = pocSummary
+        )
+    }
+
     private fun buildTradeSetup(
         candles: List<Candle>,
         ltf: SingleTfAnalysis,
@@ -985,7 +1167,8 @@ object TbtSmcEngine {
         htf: SingleTfAnalysis?,
         macroLabel: String,
         macro: SingleTfAnalysis?,
-        dealingZoneLabel: String
+        dealingZoneLabel: String,
+        volumeProfile: VolumeProfileAnalysis
     ): TbtTradeSetup {
         val spot = candles.last().close
         if (!spot.isFinite() || spot <= 0.0) return TbtTradeSetup()
@@ -1098,6 +1281,8 @@ object TbtSmcEngine {
                 isConfirmedEntry = false,
                 confidencePercent = max(bullScore, bearScore).coerceIn(15, 55),
                 statusLabel = "Wait • Mixed MTF / Mid-Range",
+                volumeRetraceEntry = volumeProfile.pocPrice,
+                volumeProfileReason = volumeProfile.pocSummary,
                 confluenceReasons = listOf("Wait for clean Demand/Supply tap or MTF alignment")
             )
         }
@@ -1177,6 +1362,14 @@ object TbtSmcEngine {
                 else -> "MTF Extension Target"
             }
 
+            val (volRetracePrice, volRetraceReason) = volumeProfile.findRetracementNode(
+                isBuy = true,
+                spot = spot,
+                sl = sl,
+                zoneLow = activeZone?.bottom,
+                zoneHigh = activeZone?.top
+            )
+
             TbtTradeSetup(
                 direction = TbtTradeDirection.BUY,
                 isConfirmedEntry = confirmed,
@@ -1190,6 +1383,8 @@ object TbtSmcEngine {
                 takeProfit2 = tp2,
                 riskReward1 = ((tp1 - entry) / risk).coerceAtLeast(0.1),
                 riskReward2 = ((tp2 - entry) / risk).coerceAtLeast(0.1),
+                volumeRetraceEntry = volRetracePrice,
+                volumeProfileReason = volRetraceReason,
                 slReason = slReason,
                 tp1Reason = tp1Reason,
                 tp2Reason = tp2Reason,
@@ -1266,6 +1461,14 @@ object TbtSmcEngine {
                 else -> "MTF Extension Target"
             }
 
+            val (volRetracePrice, volRetraceReason) = volumeProfile.findRetracementNode(
+                isBuy = false,
+                spot = spot,
+                sl = sl,
+                zoneLow = activeZone?.bottom,
+                zoneHigh = activeZone?.top
+            )
+
             TbtTradeSetup(
                 direction = TbtTradeDirection.SELL,
                 isConfirmedEntry = confirmed,
@@ -1279,6 +1482,8 @@ object TbtSmcEngine {
                 takeProfit2 = tp2,
                 riskReward1 = ((entry - tp1) / risk).coerceAtLeast(0.1),
                 riskReward2 = ((entry - tp2) / risk).coerceAtLeast(0.1),
+                volumeRetraceEntry = volRetracePrice,
+                volumeProfileReason = volRetraceReason,
                 slReason = slReason,
                 tp1Reason = tp1Reason,
                 tp2Reason = tp2Reason,

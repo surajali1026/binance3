@@ -586,6 +586,22 @@ class MarketRepository(
         }
     }
 
+    suspend fun fetchSpotKlines(
+        symbol: String,
+        timeframe: Timeframe,
+        limit: Int = 180
+    ): List<Candle> = withContext(Dispatchers.IO) {
+        runCatching {
+            val mode = MarketEndpointMode.VISION_MIRROR
+            val (baseInterval, factor) = CandleAggregator.pickBaseInterval(timeframe, mode)
+            val baseLimit = (limit.toLong() * factor).coerceIn(30L, 500L).toInt()
+            val raw = visionApi.getKlines(symbol = symbol, interval = baseInterval, limit = baseLimit).string()
+            val parsed = BinancePayloadParser.parseKlineArray(raw)
+            if (parsed.isEmpty()) emptyList()
+            else CandleAggregator.aggregate(parsed, timeframe, mode)
+        }.getOrDefault(emptyList())
+    }
+
     fun getCachedCandles(
         symbol: String,
         priceSource: PriceSource,

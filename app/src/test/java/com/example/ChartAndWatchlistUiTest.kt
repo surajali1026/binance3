@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipeRight
@@ -560,6 +561,7 @@ class ChartAndWatchlistUiTest {
         var hudToggled = 0
         var tradeSetupToggled = 0
         var mtfToggled = 0
+        var volumeProfileToggled = 0
         var alertPriceRequested: Double? = null
 
         val state = ChartUiState(
@@ -584,7 +586,8 @@ class ChartAndWatchlistUiTest {
                         onToggleTbtSignals = { signalsToggled++ },
                         onToggleTbtHud = { hudToggled++ },
                         onToggleTbtTradeSetup = { tradeSetupToggled++ },
-                        onToggleTbtMtf = { mtfToggled++ }
+                        onToggleTbtMtf = { mtfToggled++ },
+                        onToggleTbtVolumeProfile = { volumeProfileToggled++ }
                     )
                     com.example.ui.chart.TbtConditionHudBadge(
                         summary = com.example.domain.indicator.TbtConditionSummary(
@@ -599,6 +602,9 @@ class ChartAndWatchlistUiTest {
                             ),
                             mtfAlignmentLabel = "Full Bullish MTF (3/3)",
                             dealingZoneLabel = "Discount",
+                            volumePocPrice = 91280.0,
+                            volumeImbalanceLabel = "Futures+Spot 2.4x Vol • Bull Imbalance",
+                            volumeSourcesLabel = "Futures+Spot",
                             tradeSetup = com.example.domain.indicator.TbtTradeSetup(
                                 direction = com.example.domain.indicator.TbtTradeDirection.BUY,
                                 isConfirmedEntry = true,
@@ -612,6 +618,8 @@ class ChartAndWatchlistUiTest {
                                 takeProfit2 = 93500.0,
                                 riskReward1 = 2.0,
                                 riskReward2 = 4.0,
+                                volumeRetraceEntry = 91280.0,
+                                volumeProfileReason = "2.4x Bull HVN Retrace",
                                 slReason = "Below Buyer Power + Buf",
                                 tp1Reason = "LTF Supply POI",
                                 tp2Reason = "1H HTF Supply",
@@ -620,6 +628,7 @@ class ChartAndWatchlistUiTest {
                         ),
                         precision = 2,
                         showTradeSetup = true,
+                        showVolumeProfile = true,
                         onQuickCreateAlert = { price -> alertPriceRequested = price }
                     )
                 }
@@ -627,27 +636,28 @@ class ChartAndWatchlistUiTest {
         }
         composeTestRule.waitForIdle()
 
-        // Floating HUD displays bias, MTF biases, Entry/SL/TP1/TP2, power level, and last signal
+        // Floating HUD displays bias, MTF biases, Entry/SL/Volume Profile Retrace, power level, and last signal
         composeTestRule.onNodeWithTag("tbt_condition_hud").assertIsDisplayed()
         composeTestRule.onNodeWithText("BULLISH").assertIsDisplayed()
         composeTestRule.onNodeWithTag("tbt_trade_setup_levels", useUnmergedTree = true).assertIsDisplayed()
         composeTestRule.onNodeWithText("EN 91,500.00").assertIsDisplayed()
         composeTestRule.onNodeWithText("SL 91,000.00").assertIsDisplayed()
+        composeTestRule.onNodeWithText("VOL 91,280.00").assertIsDisplayed()
         composeTestRule.onNodeWithText("Bull Pwr: 91,250.50").assertIsDisplayed()
         composeTestRule.onNodeWithText("3CR BUY Confirmed").assertIsDisplayed()
 
-        // Clicking HUD expands MTF alignment details & 1-tap alert shortcuts
+        // Clicking HUD expands MTF + Volume Profile details & 1-tap Alert VOL shortcut
         composeTestRule.onNodeWithTag("tbt_condition_hud").performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("tbt_hud_expanded_details", useUnmergedTree = true).assertIsDisplayed()
-        composeTestRule.onNodeWithText("Alert TP1").assertIsDisplayed().performClick()
-        assertEquals(92500.0, alertPriceRequested!!, 0.001)
+        composeTestRule.onNodeWithText("Alert VOL").assertIsDisplayed().performClick()
+        assertEquals(91280.0, alertPriceRequested!!, 0.001)
 
         // 1-click toggle works
         composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
         assertEquals(1, mainToggled)
 
-        // Settings popover opens and toggles all 7 layers
+        // Settings popover opens and toggles all 8 layers including Volume Profile
         composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed().performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("tbt_smc_settings_menu").assertIsDisplayed()
@@ -656,6 +666,7 @@ class ChartAndWatchlistUiTest {
         composeTestRule.onNodeWithTag("tbt_layer_overlap").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_signals").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_trade_setup").performClick()
+        composeTestRule.onNodeWithTag("tbt_layer_volume_profile").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_mtf").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_hud").performClick()
         assertEquals(1, zonesToggled)
@@ -663,6 +674,7 @@ class ChartAndWatchlistUiTest {
         assertEquals(1, overlapToggled)
         assertEquals(1, signalsToggled)
         assertEquals(1, tradeSetupToggled)
+        assertEquals(1, volumeProfileToggled)
         assertEquals(1, mtfToggled)
         assertEquals(1, hudToggled)
     }
@@ -729,5 +741,58 @@ class ChartAndWatchlistUiTest {
         composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
         composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed()
         assertEquals(true, toggled)
+    }
+
+    @Test
+    fun `coin switcher search retains typed characters across live ticker updates`() {
+        val btc = FuturesContract("BTCUSDT", "BTCUSDT", "BTC", "USDT", 2, 3, 0.1, "PERPETUAL", "TRADING")
+        val eth = FuturesContract("ETHUSDT", "ETHUSDT", "ETH", "USDT", 2, 3, 0.1, "PERPETUAL", "TRADING")
+        val liveTick = androidx.compose.runtime.mutableStateOf(
+            listOf(
+                com.example.domain.model.WatchlistItem(
+                    btc,
+                    TickerSnapshot("BTCUSDT", 92000.0, 92000.0, 92000.0, 4.5, 1_500_000_000.0, 93000.0, 88000.0),
+                    isFavorite = true
+                ),
+                com.example.domain.model.WatchlistItem(
+                    eth,
+                    TickerSnapshot("ETHUSDT", 3200.0, 3200.0, 3200.0, -3.2, 450_000_000.0, 3350.0, 3150.0),
+                    isFavorite = false
+                )
+            )
+        )
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                com.example.ui.chart.QuickCoinSwitcherSheet(
+                    items = liveTick.value,
+                    currentSymbol = "BTCUSDT",
+                    onSelectSymbol = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("coin_switcher_search_input").performTextInput("ETH")
+        composeTestRule.waitForIdle()
+
+        // Simulate live WebSocket ticker update while user has typed "ETH"
+        liveTick.value = listOf(
+            com.example.domain.model.WatchlistItem(
+                btc,
+                TickerSnapshot("BTCUSDT", 92150.0, 92150.0, 92150.0, 4.7, 1_510_000_000.0, 93000.0, 88000.0),
+                isFavorite = true
+            ),
+            com.example.domain.model.WatchlistItem(
+                eth,
+                TickerSnapshot("ETHUSDT", 3215.0, 3215.0, 3215.0, -3.0, 460_000_000.0, 3350.0, 3150.0),
+                isFavorite = false
+            )
+        )
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("ETHUSDT").assertIsDisplayed()
+        composeTestRule.onNodeWithText("BTCUSDT").assertDoesNotExist()
     }
 }

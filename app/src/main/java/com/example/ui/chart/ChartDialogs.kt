@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarBorder
@@ -49,6 +50,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,7 +58,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.AlertCondition
@@ -93,7 +98,10 @@ fun QuickCoinSwitcherSheet(
     onSelectSymbolWithContext: ((String, List<String>, String) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
-    var query by remember { mutableStateOf("") }
+    var queryValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(""))
+    }
+    val query = queryValue.text
     var activeFilter by remember { mutableStateOf(WatchlistFilter.ALL) }
     val filtered = remember(items, query, activeFilter) {
         val nowMs = System.currentTimeMillis()
@@ -188,10 +196,29 @@ fun QuickCoinSwitcherSheet(
             )
             Spacer(modifier = Modifier.height(10.dp))
             OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
+                value = queryValue,
+                onValueChange = { queryValue = it },
                 placeholder = { Text("Search symbol...") },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Characters,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Ascii,
+                    imeAction = ImeAction.Search
+                ),
+                trailingIcon = if (query.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { queryValue = TextFieldValue("") }) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Clear Search",
+                                tint = TextMuted
+                            )
+                        }
+                    }
+                } else {
+                    null
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("coin_switcher_search_input")
@@ -240,7 +267,7 @@ fun QuickCoinSwitcherSheet(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(120.dp),
+                        .height(340.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -257,7 +284,7 @@ fun QuickCoinSwitcherSheet(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 360.dp)
+                        .height(340.dp)
                         .testTag("coin_switcher_list")
                 ) {
                 items(filtered, key = { it.contract.symbol }) { item ->

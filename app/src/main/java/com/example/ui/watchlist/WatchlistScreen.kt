@@ -26,6 +26,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -46,13 +47,23 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -328,6 +339,17 @@ private fun SearchBarRow(
     query: String,
     onQueryChange: (String) -> Unit
 ) {
+    var textFieldValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(query))
+    }
+    var isFocused by remember { mutableStateOf(false) }
+
+    LaunchedEffect(query, isFocused) {
+        if (!isFocused && query != textFieldValue.text) {
+            textFieldValue = TextFieldValue(query)
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -347,7 +369,7 @@ private fun SearchBarRow(
         )
         Spacer(modifier = Modifier.width(8.dp))
         Box(modifier = Modifier.weight(1f)) {
-            if (query.isEmpty()) {
+            if (textFieldValue.text.isEmpty()) {
                 Text(
                     text = "Search symbol (e.g. BTCUSDT, ETH, SOL)",
                     style = MaterialTheme.typography.bodyMedium,
@@ -355,20 +377,37 @@ private fun SearchBarRow(
                 )
             }
             BasicTextField(
-                value = query,
-                onValueChange = onQueryChange,
+                value = textFieldValue,
+                onValueChange = { next ->
+                    textFieldValue = next
+                    onQueryChange(next.text)
+                },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Characters,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Ascii,
+                    imeAction = ImeAction.Search
+                ),
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
                 cursorBrush = SolidColor(AmberGold),
                 modifier = Modifier
                     .fillMaxWidth()
+                    .onFocusChanged { focusState ->
+                        isFocused = focusState.isFocused
+                    }
                     .testTag("watchlist_search_input")
             )
         }
-        if (query.isNotEmpty()) {
+        if (textFieldValue.text.isNotEmpty()) {
             IconButton(
-                onClick = { onQueryChange("") },
-                modifier = Modifier.size(32.dp)
+                onClick = {
+                    textFieldValue = TextFieldValue("")
+                    onQueryChange("")
+                },
+                modifier = Modifier
+                    .size(32.dp)
+                    .testTag("watchlist_search_clear")
             ) {
                 Icon(
                     imageVector = Icons.Filled.Close,

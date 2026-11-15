@@ -179,7 +179,8 @@ class ChartViewModel(
         val htfLabel: String = "1H",
         val htfCandles: List<Candle> = emptyList(),
         val macroLabel: String = "4H",
-        val macroCandles: List<Candle> = emptyList()
+        val macroCandles: List<Candle> = emptyList(),
+        val spotCandles: List<Candle> = emptyList()
     )
 
     private val _mtfBundle = MutableStateFlow(MtfCandleBundle())
@@ -361,12 +362,16 @@ class ChartViewModel(
             val safeMacro = if (validMtf) {
                 if (replay.isActive) mtf.macroCandles.filter { it.closeTime <= cutoffCloseTime } else mtf.macroCandles
             } else emptyList()
+            val safeSpot = if (validMtf) {
+                if (replay.isActive) mtf.spotCandles.filter { it.closeTime <= cutoffCloseTime } else mtf.spotCandles
+            } else emptyList()
             val mtfInput = TbtMtfInput(
                 currentTfLabel = if (validMtf) mtf.ltfLabel else tfId,
                 htfLabel = mtf.htfLabel,
                 htfCandles = safeHtf,
                 macroLabel = mtf.macroLabel,
-                macroCandles = safeMacro
+                macroCandles = safeMacro,
+                spotCandles = safeSpot
             )
             TbtSmcEngine.calculate(displayed, prefs.toTbtSmcConfig(), mtfInput)
         }
@@ -613,15 +618,20 @@ class ChartViewModel(
                             ?: marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.macro).getOrNull()
                             ?: emptyList()
                     }
+                    val spotDeferred = async {
+                        marketRepository.fetchSpotKlines(symbol, activeTf, limit = 150)
+                    }
                     val htfList = htfDeferred.await()
                     val macroList = macroDeferred.await()
+                    val spotList = spotDeferred.await()
                     _mtfBundle.value = MtfCandleBundle(
                         seriesKey = seriesKey,
                         ltfLabel = activeTf.label,
                         htfLabel = mtfPair.htf.label,
                         htfCandles = htfList,
                         macroLabel = mtfPair.macro.label,
-                        macroCandles = macroList
+                        macroCandles = macroList,
+                        spotCandles = spotList
                     )
                     // Also fetch fresh REST klines if only cached data was loaded initially
                     val freshHtf = marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.htf).getOrNull()
@@ -641,16 +651,18 @@ class ChartViewModel(
             loadPairOnce()
             while (isActive) {
                 delay(60_000L)
-                if (!uiState.value.preferences.let { it.showTbtSmc && it.tbtUseMultiTimeframe }) continue
+                if (!uiState.value.preferences.let { it.showTbtSmc && (it.tbtUseMultiTimeframe || it.tbtShowVolumeProfile) }) continue
                 val freshHtf = marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.htf).getOrNull()
                 val freshMacro = if (mtfPair.macro.id == mtfPair.htf.id) null
                 else marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.macro).getOrNull()
-                if (freshHtf != null || freshMacro != null) {
+                val freshSpot = marketRepository.fetchSpotKlines(symbol, activeTf, limit = 150)
+                if (freshHtf != null || freshMacro != null || freshSpot.isNotEmpty()) {
                     _mtfBundle.update { prev ->
                         if (prev.seriesKey != seriesKey) prev
                         else prev.copy(
                             htfCandles = freshHtf ?: prev.htfCandles,
-                            macroCandles = freshMacro ?: prev.macroCandles
+                            macroCandles = freshMacro ?: prev.macroCandles,
+                            spotCandles = freshSpot.ifEmpty { prev.spotCandles }
                         )
                     }
                 }
@@ -1458,6 +1470,10 @@ class ChartViewModel(
 
     fun toggleTbtTradeSetup() {
         updatePreferences { it.copy(tbtShowTradeSetup = !it.tbtShowTradeSetup) }
+    }
+
+    fun toggleTbtVolumeProfile() {
+        updatePreferences { it.copy(tbtShowVolumeProfile = !it.tbtShowVolumeProfile) }
     }
 
     fun toggleTbtMultiTimeframe() {
