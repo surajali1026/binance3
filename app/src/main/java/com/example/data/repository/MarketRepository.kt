@@ -6,6 +6,10 @@ import com.example.data.remote.BinanceSocketManager
 import com.example.data.remote.BinanceVisionApi
 import com.example.data.remote.BybitLinearApi
 import com.example.data.remote.BybitPayloadParser
+import com.example.data.remote.CoinGeckoApi
+import com.example.data.remote.CoinPaprikaApi
+import com.example.data.remote.MarketCapInfo
+import com.example.data.remote.MarketCapPayloadParser
 import com.example.data.remote.MarketEndpointMode
 import com.example.data.remote.SocketConnectionState
 import com.example.domain.model.Candle
@@ -46,7 +50,9 @@ class MarketRepository(
     private val demoApi: BinanceFuturesApi,
     private val bybitApi: BybitLinearApi,
     private val visionApi: BinanceVisionApi,
-    private val socketManager: BinanceSocketManager
+    private val socketManager: BinanceSocketManager,
+    private val coinGeckoApi: CoinGeckoApi? = null,
+    private val coinPaprikaApi: CoinPaprikaApi? = null
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -65,6 +71,10 @@ class MarketRepository(
     private val tickerSubscriberCount = AtomicInteger(0)
     private var activeBybitWatchlistTopics: List<String> = emptyList()
 
+    @Volatile
+    private var cachedMarketCaps: Map<String, MarketCapInfo> = emptyMap()
+    private val lastMarketCapFetchMs = AtomicLong(0L)
+
     init {
         scope.launch {
             socketManager.tickerUpdates.collect { updates ->
@@ -82,7 +92,9 @@ class MarketRepository(
                             priceChangePercent24h = u.priceChangePercent24h ?: prev?.priceChangePercent24h ?: 0.0,
                             quoteVolume24h = u.quoteVolume24h ?: prev?.quoteVolume24h ?: 0.0,
                             high24h = u.high24h ?: prev?.high24h ?: last,
-                            low24h = u.low24h ?: prev?.low24h ?: last
+                            low24h = u.low24h ?: prev?.low24h ?: last,
+                            marketCap = prev?.marketCap,
+                            marketCapRank = prev?.marketCapRank
                         )
                     }
                     mutable
@@ -120,6 +132,7 @@ class MarketRepository(
     }
 
     suspend fun refreshMarketOverview(): Result<Unit> = withContext(Dispatchers.IO) {
+        val mcapJob = scope.launch { refreshMarketCapDirectoryIfNeeded() }
         runCatching {
             when (_endpointMode.value) {
                 MarketEndpointMode.FUTURES_PROD -> {
@@ -159,7 +172,82 @@ class MarketRepository(
                     loadFromVisionMirror()
                 }
             }
+        }.also {
+            if (!mcapJob.isCompleted) {
+                // Re-apply once market cap fetch completes in background if it finished after exchange load
+                mcapJob.invokeOnCompletion {
+                    val currentContracts = _contracts.value
+                    if (currentContracts.isNotEmpty() && cachedMarketCaps.isNotEmpty()) {
+                        _tickers.update { current -> enrichTickerMapWithMarketCap(currentContracts, current) }
+                    }
+                }
+            }
         }
+    }
+
+    private suspend fun refreshMarketCapDirectoryIfNeeded() {
+        val now = System.currentTimeMillis()
+        if (cachedMarketCaps.isNotEmpty() && now - lastMarketCapFetchMs.get() < 300_000L) {
+            return
+        }
+        val fromGecko = runCatching {
+            val raw = coinGeckoApi?.getTopMarkets()?.string() ?: return@runCatching emptyMap()
+            MarketCapPayloadParser.parseCoinGeckoMarkets(raw)
+        }.getOrDefault(emptyMap())
+
+        val resolved = if (fromGecko.isNotEmpty()) {
+            fromGecko
+        } else {
+            runCatching {
+                val raw = coinPaprikaApi?.getTickers()?.string() ?: return@runCatching emptyMap()
+                MarketCapPayloadParser.parseCoinPaprikaTickers(raw)
+            }.getOrDefault(emptyMap())
+        }
+
+        if (resolved.isNotEmpty()) {
+            cachedMarketCaps = resolved
+            lastMarketCapFetchMs.set(System.currentTimeMillis())
+        }
+    }
+
+    private fun enrichTickerMapWithMarketCap(
+        contracts: List<FuturesContract>,
+        rawTickers: Map<String, TickerSnapshot>
+    ): Map<String, TickerSnapshot> {
+        val mcapMap = cachedMarketCaps
+        val mutable = rawTickers.toMutableMap()
+        val unmatched = mutableListOf<FuturesContract>()
+        var maxMatchedRank = 0
+
+        for (contract in contracts) {
+            val snap = mutable[contract.symbol] ?: continue
+            val info = MarketCapPayloadParser.lookupForBaseAsset(
+                baseAsset = contract.baseAsset,
+                symbol = contract.symbol,
+                marketCaps = mcapMap
+            )
+            if (info != null) {
+                if (info.rank > maxMatchedRank) maxMatchedRank = info.rank
+                mutable[contract.symbol] = snap.copy(
+                    marketCap = info.marketCap,
+                    marketCapRank = info.rank
+                )
+            } else {
+                unmatched.add(contract)
+            }
+        }
+
+        // Assign deterministic fallback sequential ranks (ordered by 24h volume) for any contract not in top directory
+        val sortedUnmatched = unmatched.sortedByDescending { mutable[it.symbol]?.quoteVolume24h ?: 0.0 }
+        var nextRank = maxMatchedRank + 1
+        for (contract in sortedUnmatched) {
+            val snap = mutable[contract.symbol] ?: continue
+            mutable[contract.symbol] = snap.copy(
+                marketCap = snap.marketCap,
+                marketCapRank = nextRank++
+            )
+        }
+        return mutable
     }
 
     private suspend fun loadBybitOrVisionFallback() {
@@ -195,7 +283,7 @@ class MarketRepository(
         }
         switchEndpointMode(mode)
         _contracts.value = loadedContracts
-        _tickers.value = tickerMap
+        _tickers.value = enrichTickerMapWithMarketCap(loadedContracts, tickerMap)
     }
 
     private suspend fun loadFromBybitLinear() {
@@ -205,7 +293,7 @@ class MarketRepository(
             throw IllegalStateException("Bybit returned empty linear futures list")
         }
         _contracts.value = loadedContracts
-        _tickers.value = tickerMap
+        _tickers.value = enrichTickerMapWithMarketCap(loadedContracts, tickerMap)
         switchEndpointMode(MarketEndpointMode.BYBIT_LINEAR)
         syncBybitWatchlistSubscriptions()
     }
@@ -250,9 +338,10 @@ class MarketRepository(
             tickerMap[dto.symbol] = dto.toDomain()
         }
 
+        val sortedContracts = loadedContracts.sortedBy { it.symbol }
         switchEndpointMode(MarketEndpointMode.VISION_MIRROR)
-        _contracts.value = loadedContracts.sortedBy { it.symbol }
-        _tickers.value = tickerMap
+        _contracts.value = sortedContracts
+        _tickers.value = enrichTickerMapWithMarketCap(sortedContracts, tickerMap)
     }
 
     fun getContract(symbol: String): FuturesContract? {

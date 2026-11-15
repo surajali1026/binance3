@@ -80,23 +80,59 @@ class WatchlistViewModel(
         val mode = statusList[3] as MarketEndpointMode
         val alertCount = statusList[4] as Int
 
-        val q = params.query.trim()
-        val combined = contracts.asSequence()
-            .filter { contract ->
-                if (q.isEmpty()) true
-                else contract.symbol.contains(q, ignoreCase = true) ||
-                    contract.baseAsset.contains(q, ignoreCase = true)
-            }
-            .map { contract ->
-                WatchlistItem(
-                    contract = contract,
-                    ticker = tickers[contract.symbol],
-                    isFavorite = favorites.contains(contract.symbol)
+        val allMapped = contracts.map { contract ->
+            val ticker = tickers[contract.symbol]
+            WatchlistItem(
+                contract = contract,
+                ticker = ticker,
+                isFavorite = favorites.contains(contract.symbol),
+                displayRank = ticker?.marketCapRank
+            )
+        }
+
+        val maxExplicitRank = allMapped.maxOfOrNull { it.displayRank ?: 0 } ?: 0
+        val unrankedSorted = allMapped
+            .filter { it.displayRank == null }
+            .sortedByDescending { it.ticker?.quoteVolume24h ?: 0.0 }
+        val fallbackRankMap = HashMap<String, Int>(unrankedSorted.size)
+        var nextRank = maxExplicitRank + 1
+        for (item in unrankedSorted) {
+            fallbackRankMap[item.contract.symbol] = nextRank++
+        }
+        val rankedAll = allMapped.map { item ->
+            val rank = item.displayRank ?: fallbackRankMap[item.contract.symbol]
+            if (rank == item.displayRank) item else item.copy(displayRank = rank)
+        }
+
+        val top100Symbols: Set<String>? = if (params.filter == WatchlistFilter.TOP_100) {
+            rankedAll
+                .sortedWith(
+                    compareBy<WatchlistItem> { it.displayRank ?: Int.MAX_VALUE }
+                        .thenByDescending { it.ticker?.marketCap ?: 0.0 }
+                        .thenByDescending { it.ticker?.quoteVolume24h ?: 0.0 }
                 )
+                .take(100)
+                .map { it.contract.symbol }
+                .toHashSet()
+        } else {
+            null
+        }
+
+        val q = params.query.trim()
+        val combined = rankedAll.asSequence()
+            .filter { item ->
+                if (top100Symbols != null && !top100Symbols.contains(item.contract.symbol)) {
+                    false
+                } else if (q.isEmpty()) {
+                    true
+                } else {
+                    item.contract.symbol.contains(q, ignoreCase = true) ||
+                        item.contract.baseAsset.contains(q, ignoreCase = true)
+                }
             }
             .filter { item ->
                 when (params.filter) {
-                    WatchlistFilter.ALL -> true
+                    WatchlistFilter.ALL, WatchlistFilter.TOP_100 -> true
                     WatchlistFilter.FAVORITES -> item.isFavorite
                     WatchlistFilter.GAINERS -> (item.ticker?.priceChangePercent24h ?: 0.0) > 0.0
                     WatchlistFilter.LOSERS -> (item.ticker?.priceChangePercent24h ?: 0.0) < 0.0
@@ -104,9 +140,12 @@ class WatchlistViewModel(
             }
 
         val comparator = when (params.sortField) {
+            WatchlistSortField.MARKET_CAP -> compareBy<WatchlistItem> { it.displayRank ?: Int.MAX_VALUE }
+                .thenByDescending { it.ticker?.marketCap ?: 0.0 }
+                .thenByDescending { it.ticker?.quoteVolume24h ?: 0.0 }
             WatchlistSortField.VOLUME -> compareBy<WatchlistItem> { it.ticker?.quoteVolume24h ?: 0.0 }
-            WatchlistSortField.PRICE -> compareBy { it.ticker?.lastPrice ?: 0.0 }
-            WatchlistSortField.CHANGE -> compareBy { it.ticker?.priceChangePercent24h ?: 0.0 }
+            WatchlistSortField.PRICE -> compareBy<WatchlistItem> { it.ticker?.lastPrice ?: 0.0 }
+            WatchlistSortField.CHANGE -> compareBy<WatchlistItem> { it.ticker?.priceChangePercent24h ?: 0.0 }
         }
         val sorted = if (params.sortAsc) {
             combined.sortedWith(comparator).toList()
@@ -163,7 +202,15 @@ class WatchlistViewModel(
     }
 
     fun onFilterChange(newFilter: WatchlistFilter) {
+        val previous = filter.value
         filter.value = newFilter
+        if (newFilter == WatchlistFilter.TOP_100) {
+            sortField.value = WatchlistSortField.MARKET_CAP
+            sortAscending.value = true
+        } else if (previous == WatchlistFilter.TOP_100 && sortField.value == WatchlistSortField.MARKET_CAP) {
+            sortField.value = WatchlistSortField.VOLUME
+            sortAscending.value = false
+        }
     }
 
     fun onSortClick(field: WatchlistSortField) {
@@ -171,7 +218,7 @@ class WatchlistViewModel(
             sortAscending.value = !sortAscending.value
         } else {
             sortField.value = field
-            sortAscending.value = false
+            sortAscending.value = field == WatchlistSortField.MARKET_CAP
         }
     }
 

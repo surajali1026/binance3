@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.swipeRight
@@ -37,7 +38,7 @@ class ChartAndWatchlistUiTest {
     val composeTestRule = createComposeRule()
 
     @Test
-    fun `chart top hud switches price source and shows symbol without branding`() {
+    fun `chart top hud switches price source via dropdown and shows coin name and live price`() {
         var selectedSource = PriceSource.LAST
         val state = ChartUiState(
             symbol = "BTCUSDT",
@@ -63,10 +64,27 @@ class ChartAndWatchlistUiTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("BTCUSDT").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Last").assertIsDisplayed()
+        composeTestRule.onNodeWithText("92,500.0").assertIsDisplayed()
+
+        // Open dropdown and select Mark Price
+        composeTestRule.onNodeWithTag("price_source_dropdown_button").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Last Price").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Mark Price").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Index Price").assertIsDisplayed()
         composeTestRule.onNodeWithTag("price_source_mark").performClick()
+        composeTestRule.waitForIdle()
         assertEquals(PriceSource.MARK, selectedSource)
+        composeTestRule.onNodeWithTag("price_source_dropdown_menu").assertDoesNotExist()
+
+        // Re-open dropdown and select Index Price
+        composeTestRule.onNodeWithTag("price_source_dropdown_button").performClick()
+        composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("price_source_index").performClick()
+        composeTestRule.waitForIdle()
         assertEquals(PriceSource.INDEX, selectedSource)
+        composeTestRule.onNodeWithTag("price_source_dropdown_menu").assertDoesNotExist()
     }
 
     @Test
@@ -308,12 +326,16 @@ class ChartAndWatchlistUiTest {
     }
 
     @Test
-    fun `fullscreen bar displays timeframes picker and exit button in portrait and landscape`() {
+    fun `fullscreen bar displays full coin name price selector timeframes picker and exit button`() {
         var selectedTf = ""
         var openedPicker = false
         var exitedFullScreen = false
+        var selectedSource = PriceSource.LAST
         val state = ChartUiState(
             symbol = "BTCUSDT",
+            contract = FuturesContract("BTCUSDT", "BTCUSDT", "BTC", "USDT", 1, 3, 0.1, "PERPETUAL", "TRADING"),
+            ticker = TickerSnapshot("BTCUSDT", 92500.0, 92510.0, 92490.0, 2.45, 1_500_000_000.0, 93000.0, 90000.0),
+            priceSource = PriceSource.LAST,
             isFullScreen = true
         )
 
@@ -322,6 +344,7 @@ class ChartAndWatchlistUiTest {
                 com.example.ui.chart.FullScreenTimeframeBar(
                     state = state,
                     onOpenCoinSwitcher = {},
+                    onSelectPriceSource = { selectedSource = it },
                     onSelectTimeframe = { selectedTf = it },
                     onOpenTimeframePicker = { openedPicker = true },
                     onAutoFit = {},
@@ -332,6 +355,13 @@ class ChartAndWatchlistUiTest {
         }
         composeTestRule.waitForIdle()
 
+        composeTestRule.onNodeWithText("BTCUSDT").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("price_source_dropdown_button").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("price_source_mark").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(PriceSource.MARK, selectedSource)
+
         composeTestRule.onNodeWithTag("tf_chip_15m").assertIsDisplayed().performClick()
         composeTestRule.onNodeWithTag("open_timeframe_picker").assertIsDisplayed().performClick()
         composeTestRule.onNodeWithTag("exit_fullscreen_button").assertIsDisplayed().performClick()
@@ -339,5 +369,124 @@ class ChartAndWatchlistUiTest {
         assertEquals("15m", selectedTf)
         assertEquals(true, openedPicker)
         assertEquals(true, exitedFullScreen)
+    }
+
+    @Test
+    fun `landscape fullscreen bar shows single row controls with full coin name and price dropdown`() {
+        var selectedSource = PriceSource.MARK
+        val state = ChartUiState(
+            symbol = "ETHUSDT",
+            contract = FuturesContract("ETHUSDT", "ETHUSDT", "ETH", "USDT", 2, 3, 0.01, "PERPETUAL", "TRADING"),
+            ticker = TickerSnapshot("ETHUSDT", 3200.0, 3205.5, 3198.25, 1.85, 900_000_000.0, 3250.0, 3100.0),
+            priceSource = PriceSource.MARK,
+            isFullScreen = true
+        )
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                com.example.ui.chart.FullScreenTimeframeBar(
+                    state = state,
+                    onOpenCoinSwitcher = {},
+                    onSelectPriceSource = { selectedSource = it },
+                    onSelectTimeframe = {},
+                    onOpenTimeframePicker = {},
+                    onAutoFit = {},
+                    onStartReplay = {},
+                    onExitFullScreen = {},
+                    modifier = Modifier.size(width = 760.dp, height = 40.dp)
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("ETHUSDT").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Mark").assertIsDisplayed()
+        composeTestRule.onNodeWithText("3,205.50").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("price_source_dropdown_button").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("price_source_index").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(PriceSource.INDEX, selectedSource)
+    }
+
+    @Test
+    fun `chart top hud triggers prev and next symbol callbacks`() {
+        var prevClicks = 0
+        var nextClicks = 0
+        val state = ChartUiState(
+            symbol = "BTCUSDT",
+            navigationSymbols = listOf("BTCUSDT", "ETHUSDT", "SOLUSDT"),
+            navigationContextLabel = "Top 100"
+        )
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                ChartTopHud(
+                    state = state,
+                    showBackButton = false,
+                    onBackClick = {},
+                    onOpenCoinSwitcher = {},
+                    onPrevSymbol = { prevClicks++ },
+                    onNextSymbol = { nextClicks++ },
+                    onSelectPriceSource = {},
+                    onOpenAlerts = {},
+                    onToggleFullScreen = {},
+                    onOpenSettings = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("chart_prev_symbol_button").assertIsDisplayed().performClick()
+        composeTestRule.onNodeWithTag("chart_next_symbol_button").assertIsDisplayed().performClick()
+
+        assertEquals(1, prevClicks)
+        assertEquals(1, nextClicks)
+    }
+
+    @Test
+    fun `quick coin switcher exposes top 100 tab and shows rank and volume metadata`() {
+        val btc = FuturesContract("BTCUSDT", "BTCUSDT", "BTC", "USDT", 2, 3, 0.1, "PERPETUAL", "TRADING")
+        val eth = FuturesContract("ETHUSDT", "ETHUSDT", "ETH", "USDT", 2, 3, 0.1, "PERPETUAL", "TRADING")
+        val items = listOf(
+            com.example.domain.model.WatchlistItem(
+                btc,
+                TickerSnapshot("BTCUSDT", 92000.0, 92000.0, 92000.0, 4.5, 1_500_000_000.0, 93000.0, 88000.0, marketCap = 1.8e12, marketCapRank = 1),
+                isFavorite = true,
+                displayRank = 1
+            ),
+            com.example.domain.model.WatchlistItem(
+                eth,
+                TickerSnapshot("ETHUSDT", 3200.0, 3200.0, 3200.0, -3.2, 450_000_000.0, 3350.0, 3150.0, marketCap = 3.8e11, marketCapRank = 2),
+                isFavorite = false,
+                displayRank = 2
+            )
+        )
+
+        var selectedWithCtx: Triple<String, List<String>, String>? = null
+        composeTestRule.setContent {
+            BinanceProTheme {
+                com.example.ui.chart.QuickCoinSwitcherSheet(
+                    items = items,
+                    currentSymbol = "BTCUSDT",
+                    onSelectSymbol = {},
+                    onSelectSymbolWithContext = { sym, list, label -> selectedWithCtx = Triple(sym, list, label) },
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("coin_switcher_filter_top_100").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("#1 • Vol: \$1.5B").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("coin_switcher_list").performScrollToIndex(1)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("#2 • Vol: \$450M").assertIsDisplayed()
+        composeTestRule.onNodeWithText("ETHUSDT").performClick()
+
+        assertEquals("ETHUSDT", selectedWithCtx?.first)
+        assertEquals(listOf("BTCUSDT", "ETHUSDT"), selectedWithCtx?.second)
+        assertEquals("Top 100", selectedWithCtx?.third)
     }
 }

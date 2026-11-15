@@ -118,3 +118,31 @@ interface BinanceVisionApi {
         const val BASE_URL = "https://data-api.binance.vision/"
     }
 }
+
+interface CoinGeckoApi {
+
+    @GET("api/v3/coins/markets")
+    suspend fun getTopMarkets(
+        @Query("vs_currency") vsCurrency: String = "usd",
+        @Query("order") order: String = "market_cap_desc",
+        @Query("per_page") perPage: Int = 250,
+        @Query("page") page: Int = 1,
+        @Query("sparkline") sparkline: Boolean = false
+    ): ResponseBody
+
+    companion object {
+        const val BASE_URL = "https://api.coingecko.com/"
+    }
+}
+
+interface CoinPaprikaApi {
+
+    @GET("v1/tickers")
+    suspend fun getTickers(
+        @Query("quotes") quotes: String = "USD"
+    ): ResponseBody
+
+    companion object {
+        const val BASE_URL = "https://api.coinpaprika.com/"
+    }
+}

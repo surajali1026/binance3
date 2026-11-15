@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +28,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.filled.AddAlert
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CropSquare
 import androidx.compose.material.icons.filled.Delete
@@ -36,6 +41,7 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.HorizontalRule
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -46,11 +52,17 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,6 +70,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.remote.SocketConnectionState
@@ -85,6 +98,8 @@ fun ChartTopHud(
     showBackButton: Boolean,
     onBackClick: () -> Unit,
     onOpenCoinSwitcher: () -> Unit,
+    onPrevSymbol: () -> Unit = {},
+    onNextSymbol: () -> Unit = {},
     onSelectPriceSource: (PriceSource) -> Unit,
     onOpenAlerts: () -> Unit,
     onToggleFullScreen: () -> Unit,
@@ -93,12 +108,13 @@ fun ChartTopHud(
     val pct = state.ticker?.priceChangePercent24h ?: 0.0
     val isUp = pct >= 0.0
     val activeAlertCount = state.allActiveAlerts.size
+    val canCycle = state.canCycleSymbols
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(CanvasVoid)
-            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .padding(horizontal = 4.dp, vertical = 2.dp)
     ) {
         Row(
             modifier = Modifier
@@ -110,134 +126,313 @@ fun ChartTopHud(
                 IconButton(
                     onClick = onBackClick,
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(30.dp)
                         .testTag("chart_back_button")
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back to Watchlist",
                         tint = TextPrimary,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
 
-            // Quick Coin Switcher Pill (No branding/logo)
-            Row(
+            // Context-Aware Coin Navigator (< | Symbol % ▾ | >) gets all remaining width
+            Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(ElevatedSurface)
-                    .border(0.75.dp, BorderSubtle, RoundedCornerShape(8.dp))
-                    .clickable(onClick = onOpenCoinSwitcher)
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                    .testTag("quick_coin_switcher"),
-                verticalAlignment = Alignment.CenterVertically
+                    .weight(1f)
+                    .padding(end = 4.dp),
+                contentAlignment = Alignment.CenterStart
             ) {
-                val dotColor = when (state.connectionState) {
-                    SocketConnectionState.CONNECTED -> BullishGreen
-                    SocketConnectionState.CONNECTING,
-                    SocketConnectionState.RECONNECTING -> AmberGold
-                    SocketConnectionState.DISCONNECTED -> BearishRed
-                }
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(dotColor)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = state.symbol,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = TextPrimary,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = ChartNumberFormatter.formatPercent(pct),
-                    style = TabularMonoStyle.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold),
-                    color = if (isUp) BullishGreen else BearishRed
-                )
-                Spacer(modifier = Modifier.width(2.dp))
-                Icon(
-                    imageVector = Icons.Filled.KeyboardArrowDown,
-                    contentDescription = "Switch symbol",
-                    tint = TextMuted,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            // Compact Market Price Selector (Last / Mark / Index)
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(ElevatedSurface)
-                    .border(0.75.dp, BorderSubtle, RoundedCornerShape(8.dp))
-                    .padding(2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                PriceSource.entries.forEach { src ->
-                    val selected = src == state.priceSource
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (selected) AmberGold else Color.Transparent)
-                            .clickable { onSelectPriceSource(src) }
-                            .padding(horizontal = 7.dp, vertical = 4.dp)
-                            .testTag("price_source_${src.name.lowercase()}")
+                            .size(width = 22.dp, height = 34.dp)
+                            .clip(RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp))
+                            .background(ElevatedSurface)
+                            .border(0.75.dp, BorderSubtle, RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp))
+                            .clickable(enabled = canCycle, onClick = onPrevSymbol)
+                            .testTag("chart_prev_symbol_button"),
+                        contentAlignment = Alignment.Center
                     ) {
+                        Icon(
+                            imageVector = Icons.Filled.ChevronLeft,
+                            contentDescription = "Previous coin in ${state.navigationContextLabel}",
+                            tint = if (canCycle) TextPrimary else TextMuted.copy(alpha = 0.4f),
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .height(34.dp)
+                            .background(ElevatedSurface)
+                            .border(0.75.dp, BorderSubtle)
+                            .clickable(onClick = onOpenCoinSwitcher)
+                            .padding(horizontal = 6.dp)
+                            .testTag("quick_coin_switcher"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val dotColor = when (state.connectionState) {
+                            SocketConnectionState.CONNECTED -> BullishGreen
+                            SocketConnectionState.CONNECTING,
+                            SocketConnectionState.RECONNECTING -> AmberGold
+                            SocketConnectionState.DISCONNECTED -> BearishRed
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .clip(CircleShape)
+                                .background(dotColor)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = src.shortLabel,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                            color = if (selected) CanvasVoid else TextMuted,
-                            fontSize = 10.sp
+                            text = state.symbol,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = ChartNumberFormatter.formatPercent(pct),
+                            style = TabularMonoStyle.copy(fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold),
+                            color = if (isUp) BullishGreen else BearishRed,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = "Switch symbol",
+                            tint = TextMuted,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(width = 22.dp, height = 34.dp)
+                            .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
+                            .background(ElevatedSurface)
+                            .border(0.75.dp, BorderSubtle, RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
+                            .clickable(enabled = canCycle, onClick = onNextSymbol)
+                            .testTag("chart_next_symbol_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ChevronRight,
+                            contentDescription = "Next coin in ${state.navigationContextLabel}",
+                            tint = if (canCycle) TextPrimary else TextMuted.copy(alpha = 0.4f),
+                            modifier = Modifier.size(15.dp)
                         )
                     }
                 }
             }
 
+            // Interactive Price Type Selector Box + Dropdown (Last / Mark / Index)
+            PriceSourceSelectorBox(
+                state = state,
+                onSelectPriceSource = onSelectPriceSource,
+                compact = false,
+                modifier = Modifier.padding(end = 2.dp)
+            )
+
             IconButton(
                 onClick = onOpenAlerts,
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(30.dp)
                     .testTag("chart_alerts_button")
             ) {
                 Icon(
                     imageVector = if (activeAlertCount > 0) Icons.Filled.NotificationsActive else Icons.Outlined.Notifications,
                     contentDescription = "Alerts",
                     tint = if (activeAlertCount > 0) AmberGold else TextMuted,
-                    modifier = Modifier.size(19.dp)
+                    modifier = Modifier.size(17.dp)
                 )
             }
 
             IconButton(
                 onClick = onToggleFullScreen,
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(30.dp)
                     .testTag("chart_fullscreen_button")
             ) {
                 Icon(
                     imageVector = Icons.Filled.Fullscreen,
                     contentDescription = "Full Screen",
                     tint = TextMuted,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp)
                 )
             }
 
             IconButton(
                 onClick = onOpenSettings,
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(30.dp)
                     .testTag("chart_settings_button")
             ) {
                 Icon(
                     imageVector = Icons.Filled.Settings,
                     contentDescription = "Chart Settings",
                     tint = TextMuted,
-                    modifier = Modifier.size(19.dp)
+                    modifier = Modifier.size(17.dp)
+                )
+            }
+        }
+    }
+}
+
+private fun resolvePriceForSource(state: ChartUiState, source: PriceSource): Double? {
+    val ticker = state.ticker
+    return when (source) {
+        PriceSource.LAST -> {
+            if (state.priceSource == PriceSource.LAST) {
+                state.currentPrice ?: ticker?.lastPrice ?: state.candles.lastOrNull()?.close
+            } else {
+                ticker?.lastPrice ?: state.candles.lastOrNull()?.close
+            }
+        }
+        PriceSource.MARK -> {
+            if (state.priceSource == PriceSource.MARK) {
+                state.currentPrice ?: ticker?.markPrice
+            } else {
+                ticker?.markPrice
+            }
+        }
+        PriceSource.INDEX -> {
+            if (state.priceSource == PriceSource.INDEX) {
+                state.currentPrice ?: ticker?.indexPrice
+            } else {
+                ticker?.indexPrice
+            }
+        }
+    }
+}
+
+@Composable
+fun PriceSourceSelectorBox(
+    state: ChartUiState,
+    onSelectPriceSource: (PriceSource) -> Unit,
+    compact: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val precision = state.contract?.pricePrecision ?: 2
+    val activePrice = resolvePriceForSource(state, state.priceSource)
+    val activePriceText = activePrice?.let { ChartNumberFormatter.formatPrice(it, precision) } ?: "--"
+    val corner = if (compact) 6.dp else 8.dp
+    val borderColor = if (expanded) AmberGold.copy(alpha = 0.85f) else BorderSubtle
+
+    Box(modifier = modifier) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(corner))
+                .background(ElevatedSurface)
+                .border(0.75.dp, borderColor, RoundedCornerShape(corner))
+                .clickable { expanded = !expanded }
+                .padding(
+                    horizontal = if (compact) 6.dp else 7.dp,
+                    vertical = if (compact) 2.5.dp else 3.dp
+                )
+                .testTag("price_source_dropdown_button"),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                Text(
+                    text = state.priceSource.shortLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AmberGold,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = if (compact) 8.5.sp else 9.sp,
+                    lineHeight = if (compact) 10.sp else 11.sp,
+                    maxLines = 1,
+                    softWrap = false
+                )
+                Text(
+                    text = activePriceText,
+                    style = TabularMonoStyle.copy(
+                        fontSize = if (compact) 10.sp else 10.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = if (compact) 12.sp else 13.sp
+                    ),
+                    color = TextPrimary,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+            Spacer(modifier = Modifier.width(if (compact) 2.dp else 3.dp))
+            Icon(
+                imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = "Select price type (${state.priceSource.label})",
+                tint = if (expanded) AmberGold else TextMuted,
+                modifier = Modifier.size(if (compact) 14.dp else 15.dp)
+            )
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            containerColor = ElevatedSurface,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+                .border(0.75.dp, BorderSubtle, RoundedCornerShape(10.dp))
+                .testTag("price_source_dropdown_menu")
+        ) {
+            PriceSource.entries.forEach { src ->
+                val selected = src == state.priceSource
+                val optionPrice = resolvePriceForSource(state, src)
+                val optionPriceText = optionPrice?.let { ChartNumberFormatter.formatPrice(it, precision) } ?: "--"
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            modifier = Modifier.widthIn(min = 152.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.padding(end = 12.dp)) {
+                                Text(
+                                    text = src.label,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (selected) AmberGold else TextPrimary,
+                                    fontSize = 12.sp,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = optionPriceText,
+                                    style = TabularMonoStyle.copy(
+                                        fontSize = 11.sp,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                                    ),
+                                    color = if (selected) TextPrimary else TextMuted,
+                                    maxLines = 1
+                                )
+                            }
+                            if (selected) {
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = "${src.label} selected",
+                                    tint = AmberGold,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    },
+                    onClick = {
+                        expanded = false
+                        onSelectPriceSource(src)
+                    },
+                    modifier = Modifier
+                        .background(if (selected) AmberGold.copy(alpha = 0.14f) else Color.Transparent)
+                        .testTag("price_source_${src.name.lowercase()}")
                 )
             }
         }
@@ -714,83 +909,196 @@ fun BarReplayControllerBar(
 fun FullScreenTimeframeBar(
     state: ChartUiState,
     onOpenCoinSwitcher: () -> Unit,
+    onPrevSymbol: () -> Unit = {},
+    onNextSymbol: () -> Unit = {},
+    onSelectPriceSource: (PriceSource) -> Unit = {},
     onSelectTimeframe: (String) -> Unit,
     onOpenTimeframePicker: () -> Unit,
     onAutoFit: () -> Unit,
     onStartReplay: () -> Unit,
     onExitFullScreen: () -> Unit,
+    showBackToWatchlist: Boolean = false,
+    onBackToWatchlist: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val pct = state.ticker?.priceChangePercent24h ?: 0.0
     val isUp = pct >= 0.0
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(40.dp)
-            .background(CanvasVoid)
-            .padding(horizontal = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Compact Symbol + 24h % Switcher
+    val canCycle = state.canCycleSymbols
+
+    val favs = state.favoriteTimeframes
+    val showActiveOutsideFavs = favs.none { it.id == state.activeTimeframe.id }
+    val visibleList = if (showActiveOutsideFavs) favs + state.activeTimeframe else favs
+
+    @Composable
+    fun CoinNavigatorCluster(modifier: Modifier = Modifier) {
         Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .background(ElevatedSurface)
-                .border(0.75.dp, BorderSubtle, RoundedCornerShape(6.dp))
-                .clickable(onClick = onOpenCoinSwitcher)
-                .padding(horizontal = 7.dp, vertical = 4.dp)
-                .testTag("fullscreen_coin_switcher"),
+            modifier = modifier,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = state.symbol.removeSuffix("USDT"),
-                style = MaterialTheme.typography.bodySmall,
-                color = TextPrimary,
-                fontWeight = FontWeight.Bold,
-                fontSize = 11.sp
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(
-                text = ChartNumberFormatter.formatPercent(pct),
-                style = TabularMonoStyle.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-                color = if (isUp) BullishGreen else BearishRed
-            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp))
+                    .background(ElevatedSurface)
+                    .border(0.75.dp, BorderSubtle, RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp))
+                    .clickable(enabled = canCycle, onClick = onPrevSymbol)
+                    .padding(horizontal = 4.dp, vertical = 5.dp)
+                    .testTag("fullscreen_prev_symbol_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.ChevronLeft,
+                    contentDescription = "Previous coin in ${state.navigationContextLabel}",
+                    tint = if (canCycle) TextPrimary else TextMuted.copy(alpha = 0.4f),
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .background(ElevatedSurface)
+                    .border(0.75.dp, BorderSubtle)
+                    .clickable(onClick = onOpenCoinSwitcher)
+                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                    .testTag("fullscreen_coin_switcher"),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = state.symbol,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = ChartNumberFormatter.formatPercent(pct),
+                    style = TabularMonoStyle.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                    color = if (isUp) BullishGreen else BearishRed,
+                    maxLines = 1,
+                    softWrap = false
+                )
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "Switch symbol",
+                    tint = TextMuted,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
+                    .background(ElevatedSurface)
+                    .border(0.75.dp, BorderSubtle, RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
+                    .clickable(enabled = canCycle, onClick = onNextSymbol)
+                    .padding(horizontal = 4.dp, vertical = 5.dp)
+                    .testTag("fullscreen_next_symbol_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.ChevronRight,
+                    contentDescription = "Next coin in ${state.navigationContextLabel}",
+                    tint = if (canCycle) TextPrimary else TextMuted.copy(alpha = 0.4f),
+                    modifier = Modifier.size(15.dp)
+                )
+            }
         }
+    }
 
-        Spacer(modifier = Modifier.width(6.dp))
+    @Composable
+    fun ActionButtonsCluster() {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (!state.viewport.isAutoFit) AmberGold.copy(alpha = 0.14f) else Color.Transparent)
+                    .clickable(onClick = onAutoFit)
+                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                    .testTag("chart_autofit_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.FitScreen,
+                    contentDescription = "Reset Price & Fit Chart",
+                    tint = if (!state.viewport.isAutoFit) AmberGold else CyanInfo,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
 
-        // Scrollable Timeframes + More
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClick = onStartReplay)
+                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                    .testTag("chart_replay_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.History,
+                    contentDescription = "Bar Replay",
+                    tint = if (state.replayState.isActive || state.replayState.isPickingStart) AmberGold else TextMuted,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(2.dp))
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(ElevatedSurface)
+                    .border(0.75.dp, BorderSubtle, RoundedCornerShape(7.dp))
+                    .clickable(onClick = onExitFullScreen)
+                    .padding(horizontal = 7.dp, vertical = 5.dp)
+                    .testTag("exit_fullscreen_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.FullscreenExit,
+                    contentDescription = "Exit Full Screen",
+                    tint = TextPrimary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+
+    @Composable
+    fun TimeframeChipsAndMoreRow(modifier: Modifier = Modifier) {
         Row(
-            modifier = Modifier
-                .weight(1f)
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            modifier = modifier,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val favs = state.favoriteTimeframes
-            val showActiveOutsideFavs = favs.none { it.id == state.activeTimeframe.id }
-            val visibleList = if (showActiveOutsideFavs) favs + state.activeTimeframe else favs
-
-            visibleList.forEach { tf ->
-                val selected = tf.id == state.activeTimeframe.id
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (selected) ToolbarSurface else Color.Transparent)
-                        .clickable { onSelectTimeframe(tf.id) }
-                        .padding(horizontal = 7.dp, vertical = 4.dp)
-                        .testTag("tf_chip_${tf.id}")
-                ) {
-                    Text(
-                        text = tf.label,
-                        style = TabularMonoStyle.copy(
-                            fontSize = 11.sp,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                        ),
-                        color = if (selected) AmberGold else TextMuted
-                    )
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                visibleList.forEach { tf ->
+                    val selected = tf.id == state.activeTimeframe.id
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (selected) ToolbarSurface else Color.Transparent)
+                            .clickable { onSelectTimeframe(tf.id) }
+                            .padding(horizontal = 7.dp, vertical = 4.dp)
+                            .testTag("tf_chip_${tf.id}")
+                    ) {
+                        Text(
+                            text = tf.label,
+                            style = TabularMonoStyle.copy(
+                                fontSize = 11.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                            ),
+                            color = if (selected) AmberGold else TextMuted
+                        )
+                    }
                 }
             }
+
+            Spacer(modifier = Modifier.width(4.dp))
 
             Box(
                 modifier = Modifier
@@ -817,57 +1125,118 @@ fun FullScreenTimeframeBar(
                 }
             }
         }
+    }
 
-        // Auto-fit Reset & Replay
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .background(if (!state.viewport.isAutoFit) AmberGold.copy(alpha = 0.14f) else Color.Transparent)
-                .clickable(onClick = onAutoFit)
-                .padding(horizontal = 6.dp, vertical = 5.dp)
-                .testTag("chart_autofit_button")
-        ) {
-            Icon(
-                imageVector = Icons.Filled.FitScreen,
-                contentDescription = "Reset Price & Fit Chart",
-                tint = if (!state.viewport.isAutoFit) AmberGold else CyanInfo,
-                modifier = Modifier.size(16.dp)
-            )
-        }
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(CanvasVoid)
+    ) {
+        val isWideLandscape = maxWidth >= 520.dp
+        if (isWideLandscape) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp)
+                    .padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (showBackToWatchlist) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(ElevatedSurface)
+                            .border(0.75.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                            .clickable(onClick = onBackToWatchlist)
+                            .padding(horizontal = 6.dp, vertical = 5.dp)
+                            .testTag("fullscreen_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back to Watchlist",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
 
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .clickable(onClick = onStartReplay)
-                .padding(horizontal = 6.dp, vertical = 5.dp)
-                .testTag("chart_replay_button")
-        ) {
-            Icon(
-                imageVector = Icons.Filled.History,
-                contentDescription = "Bar Replay",
-                tint = if (state.replayState.isActive || state.replayState.isPickingStart) AmberGold else TextMuted,
-                modifier = Modifier.size(16.dp)
-            )
-        }
+                CoinNavigatorCluster()
 
-        Spacer(modifier = Modifier.width(2.dp))
+                Spacer(modifier = Modifier.width(6.dp))
 
-        // Exit Full Screen Button
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(7.dp))
-                .background(ElevatedSurface)
-                .border(0.75.dp, BorderSubtle, RoundedCornerShape(7.dp))
-                .clickable(onClick = onExitFullScreen)
-                .padding(horizontal = 7.dp, vertical = 5.dp)
-                .testTag("exit_fullscreen_button")
-        ) {
-            Icon(
-                imageVector = Icons.Filled.FullscreenExit,
-                contentDescription = "Exit Full Screen",
-                tint = TextPrimary,
-                modifier = Modifier.size(16.dp)
-            )
+                PriceSourceSelectorBox(
+                    state = state,
+                    onSelectPriceSource = onSelectPriceSource,
+                    compact = true
+                )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                TimeframeChipsAndMoreRow(modifier = Modifier.weight(1f))
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                ActionButtonsCluster()
+            }
+        } else {
+            // Compact portrait full-screen layout: preserves full coin name, price selector dropdown, and timeframes without clipping
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(36.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (showBackToWatchlist) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(ElevatedSurface)
+                                .border(0.75.dp, BorderSubtle, RoundedCornerShape(6.dp))
+                                .clickable(onClick = onBackToWatchlist)
+                                .padding(horizontal = 6.dp, vertical = 5.dp)
+                                .testTag("fullscreen_back_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back to Watchlist",
+                                tint = TextPrimary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 4.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        CoinNavigatorCluster()
+                    }
+
+                    PriceSourceSelectorBox(
+                        state = state,
+                        onSelectPriceSource = onSelectPriceSource,
+                        compact = true,
+                        modifier = Modifier.padding(end = 2.dp)
+                    )
+
+                    ActionButtonsCluster()
+                }
+
+                TimeframeChipsAndMoreRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(30.dp)
+                )
+            }
         }
     }
 }

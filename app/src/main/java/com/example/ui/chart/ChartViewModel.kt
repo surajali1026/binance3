@@ -110,8 +110,13 @@ data class ChartUiState(
     val replayState: BarReplayState = BarReplayState(),
     val preferences: ChartPreferences = ChartPreferences(),
     val isFullScreen: Boolean = false,
-    val switcherItems: List<WatchlistItem> = emptyList()
+    val switcherItems: List<WatchlistItem> = emptyList(),
+    val navigationSymbols: List<String> = emptyList(),
+    val navigationContextLabel: String = "All"
 ) {
+    val canCycleSymbols: Boolean
+        get() = navigationSymbols.size > 1
+
     val displayedCandles: List<Candle>
         get() = if (replayState.isActive && replayState.cutoffIndex in candles.indices) {
             candles.subList(0, replayState.cutoffIndex + 1)
@@ -134,6 +139,7 @@ class ChartViewModel(
 ) : ViewModel() {
 
     private val _symbol = MutableStateFlow("BTCUSDT")
+    val symbolState: StateFlow<String> = _symbol.asStateFlow()
     private val _priceSource = MutableStateFlow(PriceSource.LAST)
     private val _timeframeId = MutableStateFlow("15m")
     private val _candles = MutableStateFlow<List<Candle>>(emptyList())
@@ -154,6 +160,9 @@ class ChartViewModel(
     private val _rangeMeasurement = MutableStateFlow<PriceRangeMeasurement?>(null)
     private val _replayState = MutableStateFlow(BarReplayState())
     private val _isFullScreen = MutableStateFlow(false)
+    private val _navigationContextSymbols = MutableStateFlow<List<String>>(emptyList())
+    val navigationContextSymbolsState: StateFlow<List<String>> = _navigationContextSymbols.asStateFlow()
+    private val _navigationContextLabel = MutableStateFlow("All")
 
     private var klineStreamJob: Job? = null
     private var replayJob: Job? = null
@@ -278,8 +287,19 @@ class ChartViewModel(
         marketRepository.tickers,
         chartStateRepository.favoriteSymbols
     ) { contracts, tickers, favorites ->
-        contracts.map { c ->
-            WatchlistItem(c, tickers[c.symbol], favorites.contains(c.symbol))
+        val raw = contracts.map { c ->
+            val t = tickers[c.symbol]
+            WatchlistItem(c, t, favorites.contains(c.symbol), displayRank = t?.marketCapRank)
+        }
+        val maxRank = raw.maxOfOrNull { it.displayRank ?: 0 } ?: 0
+        var nextRank = maxRank + 1
+        val unrankedMap = HashMap<String, Int>()
+        for (item in raw.filter { it.displayRank == null }.sortedByDescending { it.ticker?.quoteVolume24h ?: 0.0 }) {
+            unrankedMap[item.contract.symbol] = nextRank++
+        }
+        raw.map { item ->
+            val rank = item.displayRank ?: unrankedMap[item.contract.symbol]
+            if (rank == item.displayRank) item else item.copy(displayRank = rank)
         }.sortedWith(
             compareByDescending<WatchlistItem> { it.isFavorite }
                 .thenByDescending { it.ticker?.quoteVolume24h ?: 0.0 }
@@ -290,12 +310,24 @@ class ChartViewModel(
         initialValue = emptyList()
     )
 
+    private data class MessageAndNavContext(
+        val error: String?,
+        val notice: String?,
+        val contextSymbols: List<String>,
+        val contextLabel: String
+    )
+
     val uiState: StateFlow<ChartUiState> = combine(
         coreMarketFlow,
         interactionFlow,
         _isLoadingHistory,
         _isPaginatingBack,
-        combine(_errorMessage, _noticeMessage) { err, notice -> err to notice },
+        combine(
+            _errorMessage,
+            _noticeMessage,
+            _navigationContextSymbols,
+            _navigationContextLabel
+        ) { err, notice, navSyms, navLabel -> MessageAndNavContext(err, notice, navSyms, navLabel) },
         marketRepository.connectionState,
         _countdownMillis,
         chartStateRepository.activeAlerts,
@@ -307,10 +339,9 @@ class ChartViewModel(
         val ui = arr[1] as InteractionSlice
         val loading = arr[2] as Boolean
         val paginating = arr[3] as Boolean
-        @Suppress("UNCHECKED_CAST")
-        val errPair = arr[4] as Pair<String?, String?>
-        val error = errPair.first
-        val notice = errPair.second
+        val msgNav = arr[4] as MessageAndNavContext
+        val error = msgNav.error
+        val notice = msgNav.notice
         val conn = arr[5] as SocketConnectionState
         val countdown = arr[6] as Long
         @Suppress("UNCHECKED_CAST")
@@ -327,6 +358,8 @@ class ChartViewModel(
         val favTfs = market.allTfs.filter { it.isFavorite }
         val contract = market.contracts.firstOrNull { it.symbol.equals(market.symbol, ignoreCase = true) }
         val ticker = market.tickers[market.symbol]
+        val navSymbols = msgNav.contextSymbols.takeIf { it.size > 1 }
+            ?: switcherItems.map { it.contract.symbol }
 
         ChartUiState(
             symbol = market.symbol,
@@ -359,7 +392,9 @@ class ChartViewModel(
             replayState = ui.replay,
             preferences = prefs,
             isFullScreen = ui.isFullScreen,
-            switcherItems = switcherItems
+            switcherItems = switcherItems,
+            navigationSymbols = navSymbols,
+            navigationContextLabel = msgNav.contextLabel
         )
     }.stateIn(
         scope = viewModelScope,
@@ -391,8 +426,18 @@ class ChartViewModel(
         }
     }
 
-    fun openSymbol(symbol: String) {
+    fun openSymbol(
+        symbol: String,
+        contextSymbols: List<String>? = null,
+        contextLabel: String? = null
+    ) {
         val clean = symbol.uppercase()
+        if (!contextSymbols.isNullOrEmpty()) {
+            _navigationContextSymbols.value = contextSymbols.map { it.uppercase() }.distinct()
+        }
+        if (!contextLabel.isNullOrBlank()) {
+            _navigationContextLabel.value = contextLabel
+        }
         if (_symbol.value == clean && _candles.value.isNotEmpty()) return
         _symbol.value = clean
         _selectedDrawingId.value = null
@@ -407,6 +452,31 @@ class ChartViewModel(
         persistChartState()
         observeSymbolPersistedData(clean)
         reloadChartFeed()
+    }
+
+    fun selectPreviousSymbol() {
+        cycleSymbol(step = -1)
+    }
+
+    fun selectNextSymbol() {
+        cycleSymbol(step = 1)
+    }
+
+    private fun cycleSymbol(step: Int) {
+        val list = _navigationContextSymbols.value.takeIf { it.size > 1 }
+            ?: switcherItemsFlow.value.map { it.contract.symbol }
+        if (list.size <= 1) return
+        val current = _symbol.value
+        val idx = list.indexOfFirst { it.equals(current, ignoreCase = true) }
+        val targetIdx = if (idx < 0) {
+            if (step > 0) 0 else list.lastIndex
+        } else {
+            (idx + step + list.size) % list.size
+        }
+        val target = list[targetIdx]
+        if (!target.equals(current, ignoreCase = true)) {
+            openSymbol(target)
+        }
     }
 
     fun selectTimeframe(timeframeId: String) {

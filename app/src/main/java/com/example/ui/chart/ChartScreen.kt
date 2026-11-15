@@ -3,6 +3,7 @@ package com.example.ui.chart
 import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -44,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -103,12 +105,17 @@ fun ChartScreen(
         createAlertRequest = price to linkedDrawing
     }
 
-    // Handle immersive full-screen system bars
-    LaunchedEffect(state.isFullScreen) {
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val isCompactLandscape = isLandscape && configuration.screenHeightDp < 600
+    val isImmersive = state.isFullScreen || isLandscape
+
+    // Handle immersive full-screen & landscape system bars (auto-hide Back, Home, Recent apps)
+    LaunchedEffect(isImmersive) {
         val window = (context as? Activity)?.window ?: return@LaunchedEffect
         val controller = WindowCompat.getInsetsController(window, view)
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        if (state.isFullScreen) {
+        if (isImmersive) {
             controller.hide(WindowInsetsCompat.Type.systemBars())
         } else {
             controller.show(WindowInsetsCompat.Type.systemBars())
@@ -127,7 +134,7 @@ fun ChartScreen(
         viewModel.toggleFullScreen()
     }
 
-    val containerModifier = if (state.isFullScreen) {
+    val containerModifier = if (isImmersive) {
         modifier
             .fillMaxSize()
             .background(CanvasVoid)
@@ -141,15 +148,26 @@ fun ChartScreen(
     }
 
     Column(modifier = containerModifier) {
-        if (state.isFullScreen) {
+        if (state.isFullScreen || isCompactLandscape) {
             FullScreenTimeframeBar(
                 state = state,
                 onOpenCoinSwitcher = { showCoinSwitcher = true },
+                onPrevSymbol = viewModel::selectPreviousSymbol,
+                onNextSymbol = viewModel::selectNextSymbol,
+                onSelectPriceSource = viewModel::selectPriceSource,
                 onSelectTimeframe = viewModel::selectTimeframe,
                 onOpenTimeframePicker = { showTimeframePicker = true },
                 onAutoFit = viewModel::triggerAutoFit,
                 onStartReplay = viewModel::startBarReplayPicker,
-                onExitFullScreen = viewModel::toggleFullScreen
+                onExitFullScreen = {
+                    if (state.isFullScreen) {
+                        viewModel.toggleFullScreen()
+                    } else if (showBackButton) {
+                        onBackToWatchlist()
+                    }
+                },
+                showBackToWatchlist = showBackButton && !state.isFullScreen,
+                onBackToWatchlist = onBackToWatchlist
             )
         } else {
             ChartTopHud(
@@ -157,6 +175,8 @@ fun ChartScreen(
                 showBackButton = showBackButton,
                 onBackClick = onBackToWatchlist,
                 onOpenCoinSwitcher = { showCoinSwitcher = true },
+                onPrevSymbol = viewModel::selectPreviousSymbol,
+                onNextSymbol = viewModel::selectNextSymbol,
                 onSelectPriceSource = viewModel::selectPriceSource,
                 onOpenAlerts = { showAlertsManager = true },
                 onToggleFullScreen = viewModel::toggleFullScreen,
@@ -191,6 +211,7 @@ fun ChartScreen(
                 onMoveWholeDrawing = viewModel::moveWholeDrawing,
                 onMoveAlertPrice = viewModel::moveAlertPrice,
                 onManualInteraction = viewModel::onChartManualInteraction,
+                isImmersive = isImmersive,
                 fallbackCanvas = {
                     ChartCanvas(
                         state = state,
@@ -442,6 +463,9 @@ fun ChartScreen(
             items = state.switcherItems,
             currentSymbol = state.symbol,
             onSelectSymbol = viewModel::openSymbol,
+            onSelectSymbolWithContext = { sym, ctxList, ctxLabel ->
+                viewModel.openSymbol(sym, ctxList, ctxLabel)
+            },
             onDismiss = { showCoinSwitcher = false }
         )
     }

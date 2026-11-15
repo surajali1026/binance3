@@ -1,5 +1,6 @@
 package com.example.ui.navigation
 
+import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -36,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -92,12 +94,16 @@ fun MainNavigation(
         }
     }
 
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(CanvasVoid)
     ) {
         val isExpandedWidth = maxWidth >= 840.dp
+        val isPhoneLandscape = isLandscape && !isExpandedWidth
 
         if (isExpandedWidth) {
             // Tablet / Foldable / Wide Landscape Split Pane (collapses cleanly in full-screen)
@@ -113,6 +119,9 @@ fun MainNavigation(
                             selectedSymbol = chartState.symbol,
                             onSelectSymbol = { symbol ->
                                 chartViewModel.openSymbol(symbol)
+                            },
+                            onSelectSymbolWithContext = { symbol, ctxSymbols, ctxLabel ->
+                                chartViewModel.openSymbol(symbol, ctxSymbols, ctxLabel)
                             },
                             onOpenAlerts = { showAlertsFromWatchlist = true },
                             applyBottomInset = true
@@ -155,6 +164,10 @@ fun MainNavigation(
                                     chartViewModel.openSymbol(symbol)
                                     activeTab = MainTab.CHART
                                 },
+                                onSelectSymbolWithContext = { symbol, ctxSymbols, ctxLabel ->
+                                    chartViewModel.openSymbol(symbol, ctxSymbols, ctxLabel)
+                                    activeTab = MainTab.CHART
+                                },
                                 onOpenAlerts = { showAlertsFromWatchlist = true },
                                 applyBottomInset = false
                             )
@@ -163,7 +176,7 @@ fun MainNavigation(
                         MainTab.CHART -> {
                             ChartScreen(
                                 viewModel = chartViewModel,
-                                showBackButton = false,
+                                showBackButton = isPhoneLandscape,
                                 onBackToWatchlist = { activeTab = MainTab.WATCHLIST },
                                 applyBottomInset = false
                             )
@@ -171,7 +184,8 @@ fun MainNavigation(
                     }
                 }
 
-                if (!chartState.isFullScreen) {
+                val hideBottomStrip = chartState.isFullScreen || (activeTab == MainTab.CHART && isPhoneLandscape)
+                if (!hideBottomStrip) {
                     BottomTabStrip(
                         activeTab = activeTab,
                         activeSymbol = chartState.symbol,

@@ -35,8 +35,9 @@ object ChartNumberFormatter {
 
     fun formatCompactVolume(vol: Double): String {
         return when {
-            vol >= 1_000_000_000.0 -> String.format(Locale.US, "$%.2fB", vol / 1_000_000_000.0)
-            vol >= 1_000_000.0 -> String.format(Locale.US, "$%.2fM", vol / 1_000_000.0)
+            vol >= 1_000_000_000.0 -> String.format(Locale.US, "$%.1fB", vol / 1_000_000_000.0)
+            vol >= 100_000_000.0 -> String.format(Locale.US, "$%.0fM", vol / 1_000_000.0)
+            vol >= 1_000_000.0 -> String.format(Locale.US, "$%.1fM", vol / 1_000_000.0)
             vol >= 1_000.0 -> String.format(Locale.US, "$%.1fK", vol / 1_000.0)
             else -> String.format(Locale.US, "$%.0f", vol)
         }

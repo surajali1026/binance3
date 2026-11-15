@@ -2,13 +2,14 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <style>
 html,body{
     margin:0;
     padding:0;
-    width:100%;
-    height:100%;
+    width:100vw;
+    height:100vh;
+    height:100dvh;
     overflow:hidden;
     background:#090d12;
     overscroll-behavior:none;
@@ -16,6 +17,15 @@ html,body{
     -webkit-user-select:none;
     user-select:none;
     -webkit-tap-highlight-color:transparent;
+}
+html.immersive-landscape,
+body.immersive-landscape{
+    position:fixed;
+    inset:0;
+    width:100vw !important;
+    height:100vh !important;
+    height:100dvh !important;
+    overflow:hidden !important;
 }
 #chart{
     position:relative;
@@ -140,6 +150,29 @@ html,body{
     };
     window.setBarCountdown = function(label, isBull, visible){
         queuedCountdown = { label: label, isBull: isBull, visible: visible };
+    };
+    window.setImmersiveMode = function(enabled){
+        const root = document.documentElement;
+        const body = document.body;
+        if(enabled){
+            root.classList.add('immersive-landscape');
+            if(body) body.classList.add('immersive-landscape');
+        } else {
+            root.classList.remove('immersive-landscape');
+            if(body) body.classList.remove('immersive-landscape');
+        }
+        if(window.resizeChart){
+            requestAnimationFrame(function(){ window.resizeChart(); });
+        }
+    };
+    window.requestChartFullscreen = function(){
+        try{
+            const target = document.documentElement;
+            if(target && target.requestFullscreen && document.fullscreenEnabled && !document.fullscreenElement){
+                const p = target.requestFullscreen();
+                if(p && typeof p.catch === 'function'){ p.catch(function(){}); }
+            }
+        } catch(_){}
     };
 
     function initChart(){
@@ -1372,6 +1405,7 @@ html,body{
             resizeRafId = requestAnimationFrame(applyResize);
         }
 
+        window.resizeChart = scheduleResize;
         if(typeof ResizeObserver !== 'undefined'){
             new ResizeObserver(scheduleResize).observe(el);
         }

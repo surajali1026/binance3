@@ -43,6 +43,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -89,18 +90,40 @@ fun QuickCoinSwitcherSheet(
     items: List<WatchlistItem>,
     currentSymbol: String,
     onSelectSymbol: (String) -> Unit,
+    onSelectSymbolWithContext: ((String, List<String>, String) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     var activeFilter by remember { mutableStateOf(WatchlistFilter.ALL) }
     val filtered = remember(items, query, activeFilter) {
         val q = query.trim()
-        val searched = if (q.isEmpty()) items else items.filter {
-            it.contract.symbol.contains(q, ignoreCase = true) ||
-                it.contract.baseAsset.contains(q, ignoreCase = true)
+        val top100Symbols = if (activeFilter == WatchlistFilter.TOP_100) {
+            items
+                .sortedWith(
+                    compareBy<WatchlistItem> { it.displayRank ?: Int.MAX_VALUE }
+                        .thenByDescending { it.ticker?.marketCap ?: 0.0 }
+                        .thenByDescending { it.ticker?.quoteVolume24h ?: 0.0 }
+                )
+                .take(100)
+                .map { it.contract.symbol }
+                .toHashSet()
+        } else {
+            null
+        }
+        val searched = items.filter { item ->
+            val matchesTop = top100Symbols == null || top100Symbols.contains(item.contract.symbol)
+            val matchesQuery = q.isEmpty() ||
+                item.contract.symbol.contains(q, ignoreCase = true) ||
+                item.contract.baseAsset.contains(q, ignoreCase = true)
+            matchesTop && matchesQuery
         }
         when (activeFilter) {
             WatchlistFilter.ALL -> searched
+            WatchlistFilter.TOP_100 -> searched.sortedWith(
+                compareBy<WatchlistItem> { it.displayRank ?: Int.MAX_VALUE }
+                    .thenByDescending { it.ticker?.marketCap ?: 0.0 }
+                    .thenByDescending { it.ticker?.quoteVolume24h ?: 0.0 }
+            )
             WatchlistFilter.FAVORITES -> searched.filter { it.isFavorite }
             WatchlistFilter.GAINERS -> searched
                 .filter { (it.ticker?.priceChangePercent24h ?: 0.0) > 0.0 }
@@ -113,6 +136,7 @@ fun QuickCoinSwitcherSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = ElevatedSurface,
         contentColor = TextPrimary
     ) {
@@ -146,6 +170,7 @@ fun QuickCoinSwitcherSheet(
             ) {
                 val filterChips = listOf(
                     WatchlistFilter.ALL to "All",
+                    WatchlistFilter.TOP_100 to "Top 100",
                     WatchlistFilter.FAVORITES to "Favorites",
                     WatchlistFilter.GAINERS to "Top Gainers",
                     WatchlistFilter.LOSERS to "Top Losers"
@@ -197,21 +222,33 @@ fun QuickCoinSwitcherSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 360.dp)
+                        .testTag("coin_switcher_list")
                 ) {
                 items(filtered, key = { it.contract.symbol }) { item ->
                     val pct = item.ticker?.priceChangePercent24h ?: 0.0
                     val isUp = pct >= 0.0
                     val isSelected = item.contract.symbol.equals(currentSymbol, ignoreCase = true)
+                    val rank = item.displayRank ?: item.ticker?.marketCapRank
+                    val rankPrefix = rank?.let { "#$it • " } ?: ""
+                    val volText = item.ticker?.let { ChartNumberFormatter.formatCompactVolume(it.quoteVolume24h) } ?: "--"
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
                             .background(if (isSelected) ToolbarSurface else Color.Transparent)
                             .clickable {
-                                onSelectSymbol(item.contract.symbol)
+                                if (onSelectSymbolWithContext != null) {
+                                    onSelectSymbolWithContext(
+                                        item.contract.symbol,
+                                        filtered.map { it.contract.symbol },
+                                        activeFilter.label
+                                    )
+                                } else {
+                                    onSelectSymbol(item.contract.symbol)
+                                }
                                 onDismiss()
                             }
-                            .padding(horizontal = 10.dp, vertical = 10.dp),
+                            .padding(horizontal = 10.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         if (item.isFavorite) {
@@ -223,12 +260,20 @@ fun QuickCoinSwitcherSheet(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                         }
-                        Text(
-                            text = item.contract.symbol,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = TextPrimary,
-                            modifier = Modifier.weight(1f)
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.contract.symbol,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = TextPrimary,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = "${rankPrefix}Vol: $volText",
+                                style = TabularMonoStyle.copy(fontSize = 11.sp),
+                                color = TextMuted,
+                                maxLines = 1
+                            )
+                        }
                         Text(
                             text = item.ticker?.let {
                                 ChartNumberFormatter.formatPrice(it.lastPrice, item.contract.pricePrecision)

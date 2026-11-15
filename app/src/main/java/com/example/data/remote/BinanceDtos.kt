@@ -463,3 +463,84 @@ object BybitPayloadParser {
         }
     }
 }
+
+data class MarketCapInfo(
+    val rank: Int,
+    val marketCap: Double
+)
+
+object MarketCapPayloadParser {
+    private val STABLECOIN_BASES = setOf("USDT", "USDC", "FDUSD", "BUSD", "TUSD", "DAI", "USDE")
+
+    fun normalizeBaseAsset(rawBase: String): String {
+        val upper = rawBase.trim().uppercase()
+        return when {
+            upper.startsWith("1000000") && upper.length > 7 -> upper.removePrefix("1000000")
+            upper.startsWith("1000") && upper.length > 4 -> upper.removePrefix("1000")
+            upper.startsWith("1M") && upper.length > 3 && upper[2].isLetter() -> upper.removePrefix("1M")
+            upper.endsWith("1000") && upper.length > 4 -> upper.removeSuffix("1000")
+            else -> upper
+        }
+    }
+
+    fun parseCoinGeckoMarkets(jsonText: String): Map<String, MarketCapInfo> {
+        val arr = JSONArray(jsonText)
+        val result = HashMap<String, MarketCapInfo>(arr.length())
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val sym = obj.optString("symbol").trim().uppercase()
+            if (sym.isBlank()) continue
+            val rank = obj.optInt("market_cap_rank", 0)
+            val mcap = obj.optDouble("market_cap", 0.0)
+            if (rank <= 0 || !mcap.isFinite() || mcap <= 0.0) continue
+            val existing = result[sym]
+            if (existing == null || rank < existing.rank) {
+                result[sym] = MarketCapInfo(rank = rank, marketCap = mcap)
+            }
+        }
+        return result
+    }
+
+    fun parseCoinPaprikaTickers(jsonText: String): Map<String, MarketCapInfo> {
+        val arr = JSONArray(jsonText)
+        val result = HashMap<String, MarketCapInfo>(512)
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val sym = obj.optString("symbol").trim().uppercase()
+            if (sym.isBlank()) continue
+            val rank = obj.optInt("rank", 0)
+            val usd = obj.optJSONObject("quotes")?.optJSONObject("USD") ?: continue
+            val mcap = usd.optDouble("market_cap", 0.0)
+            if (rank <= 0 || !mcap.isFinite() || mcap <= 0.0) continue
+            val existing = result[sym]
+            if (existing == null || rank < existing.rank) {
+                result[sym] = MarketCapInfo(rank = rank, marketCap = mcap)
+            }
+        }
+        return result
+    }
+
+    fun lookupForBaseAsset(
+        baseAsset: String,
+        symbol: String,
+        marketCaps: Map<String, MarketCapInfo>
+    ): MarketCapInfo? {
+        if (marketCaps.isEmpty()) return null
+        val rawUpper = baseAsset.trim().uppercase()
+        if (rawUpper in STABLECOIN_BASES) {
+            return marketCaps[rawUpper]
+        }
+        marketCaps[rawUpper]?.let { return it }
+        val normalized = normalizeBaseAsset(rawUpper)
+        if (normalized != rawUpper) {
+            marketCaps[normalized]?.let { return it }
+        }
+        val symNoQuote = symbol.uppercase().removeSuffix("USDT").removeSuffix("USDC")
+        marketCaps[symNoQuote]?.let { return it }
+        val normSym = normalizeBaseAsset(symNoQuote)
+        if (normSym != symNoQuote) {
+            marketCaps[normSym]?.let { return it }
+        }
+        return null
+    }
+}

@@ -372,4 +372,55 @@ class TradingCoreUnitTest {
         assertTrue(vm.viewportState.value.isAutoFit)
         assertEquals(8f, vm.viewportState.value.rightOffsetBars, 0.001f)
     }
+
+    @Test
+    fun `market cap parser normalizes scaled futures symbols and preserves highest rank`() {
+        val geckoJson = """
+            [
+              {"id":"bitcoin","symbol":"btc","market_cap":1800000000000,"market_cap_rank":1},
+              {"id":"pepe","symbol":"pepe","market_cap":8500000000,"market_cap_rank":21},
+              {"id":"fake-btc","symbol":"btc","market_cap":1000,"market_cap_rank":999},
+              {"id":"1inch","symbol":"1inch","market_cap":450000000,"market_cap_rank":140}
+            ]
+        """.trimIndent()
+        val parsed = com.example.data.remote.MarketCapPayloadParser.parseCoinGeckoMarkets(geckoJson)
+        assertEquals(1, parsed["BTC"]?.rank)
+        assertEquals(21, parsed["PEPE"]?.rank)
+        assertEquals(140, parsed["1INCH"]?.rank)
+
+        assertEquals("PEPE", com.example.data.remote.MarketCapPayloadParser.normalizeBaseAsset("1000PEPE"))
+        assertEquals("BABYDOGE", com.example.data.remote.MarketCapPayloadParser.normalizeBaseAsset("1MBABYDOGE"))
+        assertEquals("1INCH", com.example.data.remote.MarketCapPayloadParser.normalizeBaseAsset("1INCH"))
+
+        val pepeMatch = com.example.data.remote.MarketCapPayloadParser.lookupForBaseAsset("1000PEPE", "1000PEPEUSDT", parsed)
+        assertNotNull(pepeMatch)
+        assertEquals(21, pepeMatch!!.rank)
+    }
+
+    @Test
+    fun `chart viewmodel cycles previous and next symbols within active category context`() {
+        val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val container = AppContainer.get(ctx)
+        val vm = com.example.ui.chart.ChartViewModel(
+            appContext = ctx,
+            marketRepository = container.marketRepository,
+            chartStateRepository = container.chartStateRepository
+        )
+
+        val gainersList = listOf("SOLUSDT", "ETHUSDT", "AVAXUSDT")
+        vm.openSymbol("ETHUSDT", contextSymbols = gainersList, contextLabel = "Gainers")
+        assertEquals("ETHUSDT", vm.symbolState.value)
+        assertEquals(gainersList, vm.navigationContextSymbolsState.value)
+
+        vm.selectNextSymbol()
+        assertEquals("AVAXUSDT", vm.symbolState.value)
+
+        // Wraps cleanly around to start of active category
+        vm.selectNextSymbol()
+        assertEquals("SOLUSDT", vm.symbolState.value)
+
+        // Previous wraps cleanly back to end of active category
+        vm.selectPreviousSymbol()
+        assertEquals("AVAXUSDT", vm.symbolState.value)
+    }
 }

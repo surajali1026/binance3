@@ -8,12 +8,14 @@ enum class PriceSource(val label: String, val shortLabel: String) {
 
 enum class WatchlistFilter(val label: String) {
     ALL("All"),
+    TOP_100("Top 100"),
     FAVORITES("Favorites"),
     GAINERS("Gainers"),
     LOSERS("Losers")
 }
 
 enum class WatchlistSortField(val label: String) {
+    MARKET_CAP("MCap"),
     VOLUME("Vol"),
     PRICE("Price"),
     CHANGE("24h %")
@@ -39,13 +41,16 @@ data class TickerSnapshot(
     val priceChangePercent24h: Double,
     val quoteVolume24h: Double,
     val high24h: Double,
-    val low24h: Double
+    val low24h: Double,
+    val marketCap: Double? = null,
+    val marketCapRank: Int? = null
 )
 
 data class WatchlistItem(
     val contract: FuturesContract,
     val ticker: TickerSnapshot?,
-    val isFavorite: Boolean
+    val isFavorite: Boolean,
+    val displayRank: Int? = ticker?.marketCapRank
 )
 
 data class Candle(

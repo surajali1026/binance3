@@ -253,6 +253,7 @@ fun LightweightChartView(
     onMoveWholeDrawing: (String, Long, Double) -> Unit = { _, _, _ -> },
     onMoveAlertPrice: (String, Double) -> Unit = { _, _ -> },
     onManualInteraction: () -> Unit,
+    isImmersive: Boolean = false,
     fallbackCanvas: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -601,6 +602,14 @@ fun LightweightChartView(
         )
     }
 
+    LaunchedEffect(chartReady, useFallbackCanvas, isImmersive) {
+        if (useFallbackCanvas || !chartReady) return@LaunchedEffect
+        webView?.evaluateJavascript(
+            "window.setImmersiveMode && window.setImmersiveMode($isImmersive)",
+            null
+        )
+    }
+
     // Watchdog: if candles are loaded but WebView fails to signal chartReady within 3.5s
     // (e.g. blocked CDN or broken WebView renderer), fall back to ChartCanvas so candles always render.
     LaunchedEffect(useFallbackCanvas, chartReady, currentCandles.isNotEmpty()) {
@@ -654,7 +663,37 @@ fun LightweightChartView(
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                     settings.allowFileAccess = true
                     settings.allowContentAccess = true
-                    webChromeClient = WebChromeClient()
+                    webChromeClient = object : WebChromeClient() {
+                        private var customView: View? = null
+                        private var customViewCallback: CustomViewCallback? = null
+
+                        override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                            if (view == null) {
+                                callback?.onCustomViewHidden()
+                                return
+                            }
+                            customView = view
+                            customViewCallback = callback
+                            (context as? android.app.Activity)?.let { act ->
+                                (act.window?.decorView as? ViewGroup)?.addView(
+                                    view,
+                                    ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
+                                )
+                            }
+                        }
+
+                        override fun onHideCustomView() {
+                            (context as? android.app.Activity)?.let { act ->
+                                customView?.let { (act.window?.decorView as? ViewGroup)?.removeView(it) }
+                            }
+                            customView = null
+                            customViewCallback?.onCustomViewHidden()
+                            customViewCallback = null
+                        }
+                    }
                     addJavascriptInterface(bridge, "AndroidChart")
                     webViewClient = object : WebViewClient() {
                         override fun onReceivedError(

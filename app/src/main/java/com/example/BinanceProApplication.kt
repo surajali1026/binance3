@@ -9,6 +9,8 @@ import com.example.data.remote.BinanceFuturesApi
 import com.example.data.remote.BinanceSocketManager
 import com.example.data.remote.BinanceVisionApi
 import com.example.data.remote.BybitLinearApi
+import com.example.data.remote.CoinGeckoApi
+import com.example.data.remote.CoinPaprikaApi
 import com.example.data.repository.ChartStateRepository
 import com.example.data.repository.MarketRepository
 import com.squareup.moshi.Moshi
@@ -82,6 +84,22 @@ class AppContainer(context: Context) {
             .create(BybitLinearApi::class.java)
     }
 
+    val coinGeckoApi: CoinGeckoApi by lazy {
+        Retrofit.Builder()
+            .baseUrl(CoinGeckoApi.BASE_URL)
+            .client(okHttpClient)
+            .build()
+            .create(CoinGeckoApi::class.java)
+    }
+
+    val coinPaprikaApi: CoinPaprikaApi by lazy {
+        Retrofit.Builder()
+            .baseUrl(CoinPaprikaApi.BASE_URL)
+            .client(okHttpClient)
+            .build()
+            .create(CoinPaprikaApi::class.java)
+    }
+
     val socketManager: BinanceSocketManager by lazy {
         BinanceSocketManager(okHttpClient)
     }
@@ -91,7 +109,15 @@ class AppContainer(context: Context) {
     }
 
     val marketRepository: MarketRepository by lazy {
-        MarketRepository(binanceProdApi, binanceDemoApi, bybitLinearApi, binanceVisionApi, socketManager)
+        MarketRepository(
+            prodApi = binanceProdApi,
+            demoApi = binanceDemoApi,
+            bybitApi = bybitLinearApi,
+            visionApi = binanceVisionApi,
+            socketManager = socketManager,
+            coinGeckoApi = coinGeckoApi,
+            coinPaprikaApi = coinPaprikaApi
+        )
     }
 
     val chartStateRepository: ChartStateRepository by lazy {

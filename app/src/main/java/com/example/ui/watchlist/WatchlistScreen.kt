@@ -82,6 +82,7 @@ fun WatchlistScreen(
     viewModel: WatchlistViewModel,
     selectedSymbol: String? = null,
     onSelectSymbol: (String) -> Unit,
+    onSelectSymbolWithContext: ((String, List<String>, String) -> Unit)? = null,
     onOpenAlerts: () -> Unit,
     applyBottomInset: Boolean = true,
     modifier: Modifier = Modifier
@@ -199,7 +200,17 @@ fun WatchlistScreen(
                         WatchlistRow(
                             item = item,
                             isSelected = item.contract.symbol.equals(selectedSymbol, ignoreCase = true),
-                            onClick = { onSelectSymbol(item.contract.symbol) },
+                            onClick = {
+                                if (onSelectSymbolWithContext != null) {
+                                    onSelectSymbolWithContext(
+                                        item.contract.symbol,
+                                        state.items.map { it.contract.symbol },
+                                        state.filter.label
+                                    )
+                                } else {
+                                    onSelectSymbol(item.contract.symbol)
+                                }
+                            },
                             onToggleFavorite = { viewModel.toggleFavorite(item.contract.symbol) }
                         )
                         HorizontalDivider(color = BorderSubtle.copy(alpha = 0.4f), thickness = 0.5.dp)
@@ -411,14 +422,31 @@ private fun SortHeaderRow(
             .padding(horizontal = 14.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        SortButton(
-            label = "Pair / Vol",
-            active = sortField == WatchlistSortField.VOLUME,
-            ascending = sortAscending,
-            onClick = { onSortClick(WatchlistSortField.VOLUME) },
+        Row(
             modifier = Modifier.weight(1.35f),
-            alignment = Alignment.CenterStart
-        )
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SortButton(
+                label = "Rank",
+                active = sortField == WatchlistSortField.MARKET_CAP,
+                ascending = sortAscending,
+                onClick = { onSortClick(WatchlistSortField.MARKET_CAP) },
+                alignment = Alignment.CenterStart
+            )
+            Text(
+                text = "/",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextMuted,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+            SortButton(
+                label = "Vol",
+                active = sortField == WatchlistSortField.VOLUME,
+                ascending = sortAscending,
+                onClick = { onSortClick(WatchlistSortField.VOLUME) },
+                alignment = Alignment.CenterStart
+            )
+        }
         SortButton(
             label = "Last Price",
             active = sortField == WatchlistSortField.PRICE,
@@ -487,6 +515,8 @@ private fun WatchlistRow(
     val priceText = ticker?.let {
         ChartNumberFormatter.formatPrice(it.lastPrice, item.contract.pricePrecision)
     } ?: "--"
+    val rank = item.displayRank ?: ticker?.marketCapRank
+    val rankPrefix = rank?.let { "#$it • " } ?: ""
     val volText = ticker?.let { ChartNumberFormatter.formatCompactVolume(it.quoteVolume24h) } ?: "--"
 
     Row(
@@ -524,7 +554,8 @@ private fun WatchlistRow(
                 Text(
                     text = "/${item.contract.quoteAsset}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted
+                    color = TextMuted,
+                    maxLines = 1
                 )
                 if (item.contract.contractType == "PERPETUAL") {
                     Spacer(modifier = Modifier.width(5.dp))
@@ -543,9 +574,11 @@ private fun WatchlistRow(
                 }
             }
             Text(
-                text = "Vol $volText",
+                text = "${rankPrefix}Vol: $volText",
                 style = TabularMonoStyle.copy(fontSize = 11.sp),
-                color = TextMuted
+                color = TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
 
@@ -554,6 +587,8 @@ private fun WatchlistRow(
             style = TabularMonoStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
             color = TextPrimary,
             textAlign = TextAlign.End,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
 
