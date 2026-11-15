@@ -9,6 +9,7 @@ import com.example.data.repository.CandleAggregator
 import com.example.domain.model.AlertCondition
 import com.example.domain.model.Candle
 import com.example.domain.model.CustomTimeUnit
+import com.example.domain.model.FuturesContract
 import com.example.domain.model.PriceAlert
 import com.example.domain.model.PriceSource
 import com.example.domain.model.Timeframe
@@ -230,6 +231,10 @@ class TradingCoreUnitTest {
             override suspend fun getIndexPriceKlines(pair: String, interval: String, limit: Int, startTime: Long?, endTime: Long?) = throw err451
         }
         val fakeBybitApi = object : BybitLinearApi {
+            override suspend fun getLinearInstruments(category: String, limit: Int) =
+                """{"retCode":0,"result":{"list":[{"symbol":"BTCUSDT","baseCoin":"BTC","quoteCoin":"USDT","contractType":"LinearPerpetual","status":"Trading","launchTime":"1585526400000","priceScale":"1","priceFilter":{"tickSize":"0.1"}},{"symbol":"NEWCOINUSDT","baseCoin":"NEWCOIN","quoteCoin":"USDT","contractType":"LinearPerpetual","status":"PreLaunch","launchTime":"4102444800000","priceScale":"4","priceFilter":{"tickSize":"0.0001"}}]}}"""
+                    .toResponseBody(null)
+
             override suspend fun getLinearTickers(category: String) =
                 """{"retCode":0,"result":{"list":[{"symbol":"BTCUSDT","lastPrice":"92000.5","markPrice":"92010.0","indexPrice":"91995.0","price24hPcnt":"0.025","turnover24h":"500000000","highPrice24h":"93000","lowPrice24h":"90000"}]}}"""
                     .toResponseBody(null)
@@ -264,7 +269,10 @@ class TradingCoreUnitTest {
         val overviewRes = repo.refreshMarketOverview()
         assertTrue(overviewRes.isSuccess)
         assertEquals(MarketEndpointMode.BYBIT_LINEAR, repo.endpointMode.value)
-        assertEquals(1, repo.contracts.value.size)
+        assertEquals(2, repo.contracts.value.size)
+        val newContract = repo.contracts.value.first { it.symbol == "NEWCOINUSDT" }
+        assertTrue(newContract.isUpcomingListing())
+        assertEquals(4102444800000L, newContract.onboardDate)
 
         val lastKlines = repo.fetchKlines("BTCUSDT", "BTCUSDT", PriceSource.LAST, Timeframe.DEFAULTS[4])
         assertEquals(92000.5, lastKlines.getOrThrow().first().close, 0.001)
@@ -422,5 +430,68 @@ class TradingCoreUnitTest {
         // Previous wraps cleanly back to end of active category
         vm.selectPreviousSymbol()
         assertEquals("AVAXUSDT", vm.symbolState.value)
+    }
+
+    @Test
+    fun `futures contract detects upcoming and recently listed symbols and formats listing schedule`() {
+        val now = 1_750_000_000_000L
+        val upcomingByStatus = FuturesContract(
+            symbol = "SOONUSDT",
+            pair = "SOONUSDT",
+            baseAsset = "SOON",
+            quoteAsset = "USDT",
+            pricePrecision = 4,
+            quantityPrecision = 1,
+            tickSize = 0.0001,
+            contractType = "PERPETUAL",
+            status = "PENDING_TRADING",
+            onboardDate = now + 2L * 86_400_000L + 3L * 3_600_000L
+        )
+        val recentCoin = FuturesContract(
+            symbol = "FRESHUSDT",
+            pair = "FRESHUSDT",
+            baseAsset = "FRESH",
+            quoteAsset = "USDT",
+            pricePrecision = 3,
+            quantityPrecision = 1,
+            tickSize = 0.001,
+            contractType = "PERPETUAL",
+            status = "TRADING",
+            onboardDate = now - 3L * 86_400_000L
+        )
+        val oldCoin = FuturesContract(
+            symbol = "BTCUSDT",
+            pair = "BTCUSDT",
+            baseAsset = "BTC",
+            quoteAsset = "USDT",
+            pricePrecision = 1,
+            quantityPrecision = 3,
+            tickSize = 0.1,
+            contractType = "PERPETUAL",
+            status = "TRADING",
+            onboardDate = now - 400L * 86_400_000L
+        )
+
+        assertTrue(upcomingByStatus.isUpcomingListing(now))
+        assertTrue(upcomingByStatus.isRecentlyListed(now))
+        assertFalse(recentCoin.isUpcomingListing(now))
+        assertTrue(recentCoin.isRecentlyListed(now, windowDays = 30))
+        assertFalse(oldCoin.isRecentlyListed(now, windowDays = 30))
+
+        val upcomingText = com.example.ui.chart.ChartNumberFormatter.formatListingSubtext(
+            upcomingByStatus.onboardDate,
+            upcomingByStatus.status,
+            now
+        )
+        assertNotNull(upcomingText)
+        assertTrue(upcomingText!!.contains("Opens") && upcomingText.contains("in 2d 3h"))
+
+        val recentText = com.example.ui.chart.ChartNumberFormatter.formatListingSubtext(
+            recentCoin.onboardDate,
+            recentCoin.status,
+            now
+        )
+        assertNotNull(recentText)
+        assertTrue(recentText!!.contains("Listed") && recentText.contains("3d ago"))
     }
 }

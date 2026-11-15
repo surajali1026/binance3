@@ -96,6 +96,7 @@ fun QuickCoinSwitcherSheet(
     var query by remember { mutableStateOf("") }
     var activeFilter by remember { mutableStateOf(WatchlistFilter.ALL) }
     val filtered = remember(items, query, activeFilter) {
+        val nowMs = System.currentTimeMillis()
         val q = query.trim()
         val top100Symbols = if (activeFilter == WatchlistFilter.TOP_100) {
             items
@@ -110,12 +111,29 @@ fun QuickCoinSwitcherSheet(
         } else {
             null
         }
+        val newListingSymbols = if (activeFilter == WatchlistFilter.NEW_LISTINGS) {
+            val upcomingAndRecent = items
+                .filter { it.contract.isUpcomingListing(nowMs) || it.contract.isRecentlyListed(nowMs, 30) }
+                .map { it.contract.symbol }
+                .toMutableSet()
+            if (upcomingAndRecent.size < 25) {
+                items
+                    .filter { it.contract.onboardDate > 0L && !upcomingAndRecent.contains(it.contract.symbol) }
+                    .sortedByDescending { it.contract.onboardDate }
+                    .take(25 - upcomingAndRecent.size)
+                    .forEach { upcomingAndRecent.add(it.contract.symbol) }
+            }
+            upcomingAndRecent
+        } else {
+            null
+        }
         val searched = items.filter { item ->
             val matchesTop = top100Symbols == null || top100Symbols.contains(item.contract.symbol)
+            val matchesNew = newListingSymbols == null || newListingSymbols.contains(item.contract.symbol)
             val matchesQuery = q.isEmpty() ||
                 item.contract.symbol.contains(q, ignoreCase = true) ||
                 item.contract.baseAsset.contains(q, ignoreCase = true)
-            matchesTop && matchesQuery
+            matchesTop && matchesNew && matchesQuery
         }
         when (activeFilter) {
             WatchlistFilter.ALL -> searched
@@ -123,6 +141,23 @@ fun QuickCoinSwitcherSheet(
                 compareBy<WatchlistItem> { it.displayRank ?: Int.MAX_VALUE }
                     .thenByDescending { it.ticker?.marketCap ?: 0.0 }
                     .thenByDescending { it.ticker?.quoteVolume24h ?: 0.0 }
+            )
+            WatchlistFilter.NEW_LISTINGS -> searched.sortedWith(
+                Comparator { a, b ->
+                    val aUpcoming = a.contract.isUpcomingListing(nowMs)
+                    val bUpcoming = b.contract.isUpcomingListing(nowMs)
+                    if (aUpcoming != bUpcoming) return@Comparator if (aUpcoming) -1 else 1
+                    if (aUpcoming) {
+                        val aTime = a.contract.onboardDate.takeIf { it > 0L } ?: Long.MAX_VALUE
+                        val bTime = b.contract.onboardDate.takeIf { it > 0L } ?: Long.MAX_VALUE
+                        val cmp = aTime.compareTo(bTime)
+                        if (cmp != 0) return@Comparator cmp
+                    } else {
+                        val cmp = b.contract.onboardDate.compareTo(a.contract.onboardDate)
+                        if (cmp != 0) return@Comparator cmp
+                    }
+                    (b.ticker?.quoteVolume24h ?: 0.0).compareTo(a.ticker?.quoteVolume24h ?: 0.0)
+                }
             )
             WatchlistFilter.FAVORITES -> searched.filter { it.isFavorite }
             WatchlistFilter.GAINERS -> searched
@@ -171,6 +206,7 @@ fun QuickCoinSwitcherSheet(
                 val filterChips = listOf(
                     WatchlistFilter.ALL to "All",
                     WatchlistFilter.TOP_100 to "Top 100",
+                    WatchlistFilter.NEW_LISTINGS to "New",
                     WatchlistFilter.FAVORITES to "Favorites",
                     WatchlistFilter.GAINERS to "Top Gainers",
                     WatchlistFilter.LOSERS to "Top Losers"
@@ -225,12 +261,21 @@ fun QuickCoinSwitcherSheet(
                         .testTag("coin_switcher_list")
                 ) {
                 items(filtered, key = { it.contract.symbol }) { item ->
+                    val nowMs = System.currentTimeMillis()
+                    val isUpcoming = item.contract.isUpcomingListing(nowMs)
                     val pct = item.ticker?.priceChangePercent24h ?: 0.0
                     val isUp = pct >= 0.0
                     val isSelected = item.contract.symbol.equals(currentSymbol, ignoreCase = true)
                     val rank = item.displayRank ?: item.ticker?.marketCapRank
                     val rankPrefix = rank?.let { "#$it • " } ?: ""
-                    val volText = item.ticker?.let { ChartNumberFormatter.formatCompactVolume(it.quoteVolume24h) } ?: "--"
+                    val volText = item.ticker?.takeIf { it.quoteVolume24h > 0.0 }?.let {
+                        ChartNumberFormatter.formatCompactVolume(it.quoteVolume24h)
+                    } ?: "--"
+                    val listingSubtext = if (activeFilter == WatchlistFilter.NEW_LISTINGS || isUpcoming) {
+                        ChartNumberFormatter.formatListingSubtext(item.contract.onboardDate, item.contract.status, nowMs)
+                    } else {
+                        null
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -273,19 +318,36 @@ fun QuickCoinSwitcherSheet(
                                 color = TextMuted,
                                 maxLines = 1
                             )
+                            if (listingSubtext != null) {
+                                Text(
+                                    text = listingSubtext,
+                                    style = TabularMonoStyle.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
+                                    color = if (isUpcoming) AmberGold else CyanInfo,
+                                    maxLines = 1
+                                )
+                            }
                         }
+                        val hasPrice = item.ticker != null && item.ticker.lastPrice > 0.0
                         Text(
-                            text = item.ticker?.let {
-                                ChartNumberFormatter.formatPrice(it.lastPrice, item.contract.pricePrecision)
-                            } ?: "--",
-                            style = TabularMonoStyle.copy(fontSize = 13.sp),
-                            color = TextPrimary
+                            text = if (hasPrice) {
+                                ChartNumberFormatter.formatPrice(item.ticker!!.lastPrice, item.contract.pricePrecision)
+                            } else if (isUpcoming) {
+                                "Pre-Launch"
+                            } else {
+                                "--"
+                            },
+                            style = TabularMonoStyle.copy(fontSize = if (!hasPrice && isUpcoming) 11.sp else 13.sp),
+                            color = if (!hasPrice && isUpcoming) AmberGold else TextPrimary
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = ChartNumberFormatter.formatPercent(pct),
+                            text = if (!hasPrice && isUpcoming) "SOON" else ChartNumberFormatter.formatPercent(pct),
                             style = TabularMonoStyle.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
-                            color = if (isUp) BullishGreen else BearishRed
+                            color = when {
+                                !hasPrice && isUpcoming -> AmberGold
+                                isUp -> BullishGreen
+                                else -> BearishRed
+                            }
                         )
                     }
                 }

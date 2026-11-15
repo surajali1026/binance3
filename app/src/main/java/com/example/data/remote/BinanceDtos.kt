@@ -22,6 +22,8 @@ data class SymbolInfoDto(
     val quoteAsset: String = "",
     val contractType: String = "",
     val status: String = "",
+    val onboardDate: Long = 0L,
+    val deliveryDate: Long = 0L,
     val pricePrecision: Int = 2,
     val quantityPrecision: Int = 3,
     val filters: List<FilterDto> = emptyList()
@@ -39,7 +41,8 @@ data class SymbolInfoDto(
             quantityPrecision = quantityPrecision,
             tickSize = tickSize,
             contractType = contractType,
-            status = status
+            status = status,
+            onboardDate = onboardDate
         )
     }
 
@@ -346,6 +349,54 @@ object BybitPayloadParser {
             )
         }
         return contracts.sortedBy { it.symbol } to tickers
+    }
+
+    data class BybitInstrumentMeta(
+        val symbol: String,
+        val baseCoin: String,
+        val quoteCoin: String,
+        val status: String,
+        val contractType: String,
+        val launchTimeMs: Long,
+        val priceScale: Int,
+        val tickSize: Double
+    )
+
+    fun parseInstrumentsResponse(jsonText: String): Map<String, BybitInstrumentMeta> {
+        val root = JSONObject(jsonText)
+        val list = root.optJSONObject("result")?.optJSONArray("list") ?: return emptyMap()
+        val result = HashMap<String, BybitInstrumentMeta>(list.length())
+        for (i in 0 until list.length()) {
+            val item = list.optJSONObject(i) ?: continue
+            val symbol = item.optString("symbol").trim().uppercase()
+            if (!symbol.endsWith("USDT") && !symbol.endsWith("USDC")) continue
+            val status = item.optString("status", "Trading")
+            if (status.equals("Closed", ignoreCase = true) || status.equals("Settling", ignoreCase = true)) continue
+            val quoteCoin = item.optString("quoteCoin").ifBlank {
+                if (symbol.endsWith("USDC")) "USDC" else "USDT"
+            }
+            val baseCoin = item.optString("baseCoin").ifBlank { symbol.removeSuffix(quoteCoin) }
+            val contractType = when (item.optString("contractType")) {
+                "LinearPerpetual" -> "PERPETUAL"
+                "LinearFutures" -> "CURRENT_QUARTER"
+                else -> "PERPETUAL"
+            }
+            val launchTimeMs = item.optString("launchTime", "0").toLongOrNull() ?: 0L
+            val priceScale = item.optString("priceScale", "2").toIntOrNull()?.coerceIn(0, 8) ?: 2
+            val tickStr = item.optJSONObject("priceFilter")?.optString("tickSize")
+            val tickSize = tickStr?.toDoubleOrNull() ?: Math.pow(10.0, -priceScale.toDouble())
+            result[symbol] = BybitInstrumentMeta(
+                symbol = symbol,
+                baseCoin = baseCoin,
+                quoteCoin = quoteCoin,
+                status = status,
+                contractType = contractType,
+                launchTimeMs = launchTimeMs,
+                priceScale = priceScale,
+                tickSize = tickSize
+            )
+        }
+        return result
     }
 
     fun parseKlineResponse(jsonText: String, intervalMs: Long): List<Candle> {

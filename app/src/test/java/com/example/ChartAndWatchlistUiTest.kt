@@ -489,4 +489,63 @@ class ChartAndWatchlistUiTest {
         assertEquals(listOf("BTCUSDT", "ETHUSDT"), selectedWithCtx?.second)
         assertEquals("Top 100", selectedWithCtx?.third)
     }
+
+    @Test
+    fun `quick coin switcher exposes new listings tab with upcoming time and listed age`() {
+        val now = System.currentTimeMillis()
+        val upcoming = FuturesContract(
+            symbol = "FUTUREUSDT",
+            pair = "FUTUREUSDT",
+            baseAsset = "FUTURE",
+            quoteAsset = "USDT",
+            pricePrecision = 4,
+            quantityPrecision = 1,
+            tickSize = 0.0001,
+            contractType = "PERPETUAL",
+            status = "PENDING_TRADING",
+            onboardDate = now + 26L * 3_600_000L
+        )
+        val recent = FuturesContract(
+            symbol = "RECENTUSDT",
+            pair = "RECENTUSDT",
+            baseAsset = "RECENT",
+            quoteAsset = "USDT",
+            pricePrecision = 3,
+            quantityPrecision = 1,
+            tickSize = 0.001,
+            contractType = "PERPETUAL",
+            status = "TRADING",
+            onboardDate = now - 2L * 86_400_000L
+        )
+        val items = listOf(
+            com.example.domain.model.WatchlistItem(upcoming, null, isFavorite = false, displayRank = null),
+            com.example.domain.model.WatchlistItem(
+                recent,
+                TickerSnapshot("RECENTUSDT", 1.25, 1.25, 1.25, 12.4, 80_000_000.0, 1.30, 1.05, marketCapRank = 180),
+                isFavorite = false,
+                displayRank = 180
+            )
+        )
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                com.example.ui.chart.QuickCoinSwitcherSheet(
+                    items = items,
+                    currentSymbol = "RECENTUSDT",
+                    onSelectSymbol = {},
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("coin_switcher_filter_new_listings").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("FUTUREUSDT").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Pre-Launch").assertIsDisplayed()
+        composeTestRule.onNodeWithText("SOON").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("coin_switcher_list").performScrollToIndex(1)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("RECENTUSDT").assertIsDisplayed()
+    }
 }

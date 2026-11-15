@@ -9,6 +9,7 @@ enum class PriceSource(val label: String, val shortLabel: String) {
 enum class WatchlistFilter(val label: String) {
     ALL("All"),
     TOP_100("Top 100"),
+    NEW_LISTINGS("New"),
     FAVORITES("Favorites"),
     GAINERS("Gainers"),
     LOSERS("Losers")
@@ -18,7 +19,8 @@ enum class WatchlistSortField(val label: String) {
     MARKET_CAP("MCap"),
     VOLUME("Vol"),
     PRICE("Price"),
-    CHANGE("24h %")
+    CHANGE("24h %"),
+    LISTING_TIME("Listed")
 }
 
 data class FuturesContract(
@@ -30,8 +32,23 @@ data class FuturesContract(
     val quantityPrecision: Int,
     val tickSize: Double,
     val contractType: String,
-    val status: String
-)
+    val status: String,
+    val onboardDate: Long = 0L
+) {
+    fun isUpcomingListing(nowMillis: Long = System.currentTimeMillis()): Boolean {
+        return status.equals("PENDING_TRADING", ignoreCase = true) ||
+            status.equals("PRE_TRADING", ignoreCase = true) ||
+            status.equals("PreLaunch", ignoreCase = true) ||
+            (onboardDate > nowMillis && onboardDate > 0L)
+    }
+
+    fun isRecentlyListed(nowMillis: Long = System.currentTimeMillis(), windowDays: Int = 30): Boolean {
+        if (onboardDate <= 0L) return false
+        if (isUpcomingListing(nowMillis)) return true
+        val windowMs = windowDays.toLong() * 86_400_000L
+        return (nowMillis - onboardDate) in 0L..windowMs
+    }
+}
 
 data class TickerSnapshot(
     val symbol: String,

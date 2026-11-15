@@ -104,6 +104,7 @@ class WatchlistViewModel(
             if (rank == item.displayRank) item else item.copy(displayRank = rank)
         }
 
+        val nowMs = System.currentTimeMillis()
         val top100Symbols: Set<String>? = if (params.filter == WatchlistFilter.TOP_100) {
             rankedAll
                 .sortedWith(
@@ -118,10 +119,29 @@ class WatchlistViewModel(
             null
         }
 
+        val newListingSymbols: Set<String>? = if (params.filter == WatchlistFilter.NEW_LISTINGS) {
+            val upcomingAndRecent = rankedAll
+                .filter { it.contract.isUpcomingListing(nowMs) || it.contract.isRecentlyListed(nowMs, 30) }
+                .map { it.contract.symbol }
+                .toMutableSet()
+            if (upcomingAndRecent.size < 25) {
+                rankedAll
+                    .filter { it.contract.onboardDate > 0L && !upcomingAndRecent.contains(it.contract.symbol) }
+                    .sortedByDescending { it.contract.onboardDate }
+                    .take(25 - upcomingAndRecent.size)
+                    .forEach { upcomingAndRecent.add(it.contract.symbol) }
+            }
+            upcomingAndRecent
+        } else {
+            null
+        }
+
         val q = params.query.trim()
         val combined = rankedAll.asSequence()
             .filter { item ->
                 if (top100Symbols != null && !top100Symbols.contains(item.contract.symbol)) {
+                    false
+                } else if (newListingSymbols != null && !newListingSymbols.contains(item.contract.symbol)) {
                     false
                 } else if (q.isEmpty()) {
                     true
@@ -132,25 +152,61 @@ class WatchlistViewModel(
             }
             .filter { item ->
                 when (params.filter) {
-                    WatchlistFilter.ALL, WatchlistFilter.TOP_100 -> true
+                    WatchlistFilter.ALL,
+                    WatchlistFilter.TOP_100,
+                    WatchlistFilter.NEW_LISTINGS -> true
                     WatchlistFilter.FAVORITES -> item.isFavorite
                     WatchlistFilter.GAINERS -> (item.ticker?.priceChangePercent24h ?: 0.0) > 0.0
                     WatchlistFilter.LOSERS -> (item.ticker?.priceChangePercent24h ?: 0.0) < 0.0
                 }
             }
 
-        val comparator = when (params.sortField) {
-            WatchlistSortField.MARKET_CAP -> compareBy<WatchlistItem> { it.displayRank ?: Int.MAX_VALUE }
-                .thenByDescending { it.ticker?.marketCap ?: 0.0 }
-                .thenByDescending { it.ticker?.quoteVolume24h ?: 0.0 }
-            WatchlistSortField.VOLUME -> compareBy<WatchlistItem> { it.ticker?.quoteVolume24h ?: 0.0 }
-            WatchlistSortField.PRICE -> compareBy<WatchlistItem> { it.ticker?.lastPrice ?: 0.0 }
-            WatchlistSortField.CHANGE -> compareBy<WatchlistItem> { it.ticker?.priceChangePercent24h ?: 0.0 }
-        }
-        val sorted = if (params.sortAsc) {
-            combined.sortedWith(comparator).toList()
-        } else {
-            combined.sortedWith(comparator.reversed()).toList()
+        val sorted = when (params.sortField) {
+            WatchlistSortField.LISTING_TIME -> {
+                if (!params.sortAsc) {
+                    // Default for New Listings: scheduled/upcoming soonest first, then newest listed first
+                    combined.sortedWith(
+                        Comparator { a, b ->
+                            val aUpcoming = a.contract.isUpcomingListing(nowMs)
+                            val bUpcoming = b.contract.isUpcomingListing(nowMs)
+                            if (aUpcoming != bUpcoming) {
+                                return@Comparator if (aUpcoming) -1 else 1
+                            }
+                            if (aUpcoming) {
+                                val aTime = a.contract.onboardDate.takeIf { it > 0L } ?: Long.MAX_VALUE
+                                val bTime = b.contract.onboardDate.takeIf { it > 0L } ?: Long.MAX_VALUE
+                                val cmp = aTime.compareTo(bTime)
+                                if (cmp != 0) return@Comparator cmp
+                            } else {
+                                val cmp = b.contract.onboardDate.compareTo(a.contract.onboardDate)
+                                if (cmp != 0) return@Comparator cmp
+                            }
+                            (b.ticker?.quoteVolume24h ?: 0.0).compareTo(a.ticker?.quoteVolume24h ?: 0.0)
+                        }
+                    ).toList()
+                } else {
+                    combined.sortedWith(
+                        compareBy<WatchlistItem> { it.contract.onboardDate.takeIf { d -> d > 0L } ?: Long.MAX_VALUE }
+                            .thenByDescending { it.ticker?.quoteVolume24h ?: 0.0 }
+                    ).toList()
+                }
+            }
+            else -> {
+                val comparator = when (params.sortField) {
+                    WatchlistSortField.MARKET_CAP -> compareBy<WatchlistItem> { it.displayRank ?: Int.MAX_VALUE }
+                        .thenByDescending { it.ticker?.marketCap ?: 0.0 }
+                        .thenByDescending { it.ticker?.quoteVolume24h ?: 0.0 }
+                    WatchlistSortField.VOLUME -> compareBy<WatchlistItem> { it.ticker?.quoteVolume24h ?: 0.0 }
+                    WatchlistSortField.PRICE -> compareBy<WatchlistItem> { it.ticker?.lastPrice ?: 0.0 }
+                    WatchlistSortField.CHANGE -> compareBy<WatchlistItem> { it.ticker?.priceChangePercent24h ?: 0.0 }
+                    WatchlistSortField.LISTING_TIME -> compareBy<WatchlistItem> { it.contract.onboardDate }
+                }
+                if (params.sortAsc) {
+                    combined.sortedWith(comparator).toList()
+                } else {
+                    combined.sortedWith(comparator.reversed()).toList()
+                }
+            }
         }
 
         WatchlistUiState(
@@ -176,9 +232,12 @@ class WatchlistViewModel(
         refresh()
         unsubscribeSocket = marketRepository.subscribeMarketTickers()
         viewModelScope.launch {
+            var tickCount = 0
             while (true) {
-                kotlinx.coroutines.delay(10_000L)
-                if (marketRepository.endpointMode.value == MarketEndpointMode.BYBIT_LINEAR) {
+                kotlinx.coroutines.delay(15_000L)
+                tickCount++
+                val mode = marketRepository.endpointMode.value
+                if (mode == MarketEndpointMode.BYBIT_LINEAR || tickCount % 4 == 0) {
                     marketRepository.refreshMarketOverview()
                 }
             }
@@ -204,12 +263,23 @@ class WatchlistViewModel(
     fun onFilterChange(newFilter: WatchlistFilter) {
         val previous = filter.value
         filter.value = newFilter
-        if (newFilter == WatchlistFilter.TOP_100) {
-            sortField.value = WatchlistSortField.MARKET_CAP
-            sortAscending.value = true
-        } else if (previous == WatchlistFilter.TOP_100 && sortField.value == WatchlistSortField.MARKET_CAP) {
-            sortField.value = WatchlistSortField.VOLUME
-            sortAscending.value = false
+        when {
+            newFilter == WatchlistFilter.TOP_100 -> {
+                sortField.value = WatchlistSortField.MARKET_CAP
+                sortAscending.value = true
+            }
+            newFilter == WatchlistFilter.NEW_LISTINGS -> {
+                sortField.value = WatchlistSortField.LISTING_TIME
+                sortAscending.value = false
+            }
+            previous == WatchlistFilter.TOP_100 && sortField.value == WatchlistSortField.MARKET_CAP -> {
+                sortField.value = WatchlistSortField.VOLUME
+                sortAscending.value = false
+            }
+            previous == WatchlistFilter.NEW_LISTINGS && sortField.value == WatchlistSortField.LISTING_TIME -> {
+                sortField.value = WatchlistSortField.VOLUME
+                sortAscending.value = false
+            }
         }
     }
 

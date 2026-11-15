@@ -263,8 +263,9 @@ class MarketRepository(
     }
 
     private suspend fun loadFromFuturesApi(api: BinanceFuturesApi, mode: MarketEndpointMode) {
+        val allowedStatuses = setOf("TRADING", "PENDING_TRADING", "PRE_TRADING")
         val loadedContracts = api.getExchangeInfo().symbols
-            .filter { it.status == "TRADING" && (it.quoteAsset == "USDT" || it.quoteAsset == "USDC") }
+            .filter { it.status.uppercase() in allowedStatuses && (it.quoteAsset == "USDT" || it.quoteAsset == "USDC") }
             .map { it.toDomain() }
             .sortedBy { it.symbol }
 
@@ -287,13 +288,57 @@ class MarketRepository(
     }
 
     private suspend fun loadFromBybitLinear() {
-        val raw = bybitApi.getLinearTickers("linear").string()
-        val (loadedContracts, tickerMap) = BybitPayloadParser.parseTickersResponse(raw)
-        if (loadedContracts.isEmpty()) {
+        val rawTickers = bybitApi.getLinearTickers("linear").string()
+        val (baseContracts, tickerMap) = BybitPayloadParser.parseTickersResponse(rawTickers)
+        if (baseContracts.isEmpty()) {
             throw IllegalStateException("Bybit returned empty linear futures list")
         }
-        _contracts.value = loadedContracts
-        _tickers.value = enrichTickerMapWithMarketCap(loadedContracts, tickerMap)
+        val instrumentsMeta = runCatching {
+            val rawInstruments = bybitApi.getLinearInstruments("linear", 1000).string()
+            BybitPayloadParser.parseInstrumentsResponse(rawInstruments)
+        }.getOrDefault(emptyMap())
+
+        val seenSymbols = HashSet<String>(baseContracts.size + 16)
+        val mergedContracts = ArrayList<FuturesContract>(baseContracts.size + 16)
+        for (c in baseContracts) {
+            seenSymbols.add(c.symbol)
+            val meta = instrumentsMeta[c.symbol]
+            if (meta != null) {
+                mergedContracts.add(
+                    c.copy(
+                        onboardDate = meta.launchTimeMs,
+                        status = if (meta.status.equals("PreLaunch", ignoreCase = true)) meta.status else c.status,
+                        contractType = meta.contractType
+                    )
+                )
+            } else {
+                mergedContracts.add(c)
+            }
+        }
+        // Include upcoming PreLaunch contracts not yet present in tickers
+        for ((sym, meta) in instrumentsMeta) {
+            if (!seenSymbols.contains(sym) &&
+                (meta.status.equals("PreLaunch", ignoreCase = true) || meta.launchTimeMs > System.currentTimeMillis())
+            ) {
+                mergedContracts.add(
+                    FuturesContract(
+                        symbol = sym,
+                        pair = sym,
+                        baseAsset = meta.baseCoin,
+                        quoteAsset = meta.quoteCoin,
+                        pricePrecision = meta.priceScale,
+                        quantityPrecision = 3,
+                        tickSize = meta.tickSize,
+                        contractType = meta.contractType,
+                        status = meta.status,
+                        onboardDate = meta.launchTimeMs
+                    )
+                )
+            }
+        }
+        val sortedContracts = mergedContracts.sortedBy { it.symbol }
+        _contracts.value = sortedContracts
+        _tickers.value = enrichTickerMapWithMarketCap(sortedContracts, tickerMap)
         switchEndpointMode(MarketEndpointMode.BYBIT_LINEAR)
         syncBybitWatchlistSubscriptions()
     }

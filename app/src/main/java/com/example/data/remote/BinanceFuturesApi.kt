@@ -60,6 +60,12 @@ interface BinanceFuturesApi {
 
 interface BybitLinearApi {
 
+    @GET("v5/market/instruments-info")
+    suspend fun getLinearInstruments(
+        @Query("category") category: String = "linear",
+        @Query("limit") limit: Int = 1000
+    ): ResponseBody
+
     @GET("v5/market/tickers")
     suspend fun getLinearTickers(
         @Query("category") category: String = "linear"

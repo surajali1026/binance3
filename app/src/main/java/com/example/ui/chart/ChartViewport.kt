@@ -80,6 +80,52 @@ object ChartNumberFormatter {
             else -> "${mins}m"
         }
     }
+
+    fun formatListingSchedule(onboardDateMs: Long): String {
+        if (onboardDateMs <= 0L) return "TBA"
+        return SimpleDateFormat("MMM dd, HH:mm", Locale.US).format(Date(onboardDateMs))
+    }
+
+    fun formatListingSubtext(
+        onboardDateMs: Long,
+        status: String,
+        nowMillis: Long = System.currentTimeMillis()
+    ): String? {
+        val isPendingStatus = status.equals("PENDING_TRADING", ignoreCase = true) ||
+            status.equals("PRE_TRADING", ignoreCase = true) ||
+            status.equals("PreLaunch", ignoreCase = true)
+        if (onboardDateMs <= 0L) {
+            return if (isPendingStatus) "Upcoming • Time TBA" else null
+        }
+        val dateStr = SimpleDateFormat("MMM dd, HH:mm", Locale.US).format(Date(onboardDateMs))
+        val diff = onboardDateMs - nowMillis
+        if (diff > 0L || isPendingStatus) {
+            if (diff <= 0L) return "Listing • $dateStr"
+            val totalMins = (diff / 60_000L).coerceAtLeast(1L)
+            val days = totalMins / 1440L
+            val hours = (totalMins % 1440L) / 60L
+            val mins = totalMins % 60L
+            val countdown = when {
+                days > 0L -> "in ${days}d ${hours}h"
+                hours > 0L -> "in ${hours}h ${mins}m"
+                else -> "in ${mins}m"
+            }
+            return "Opens $dateStr • $countdown"
+        }
+        val elapsed = nowMillis - onboardDateMs
+        val totalMins = (elapsed / 60_000L).coerceAtLeast(1L)
+        val hours = totalMins / 60L
+        val days = hours / 24L
+        return when {
+            days > 365L -> {
+                val withYear = SimpleDateFormat("MMM dd, yyyy", Locale.US).format(Date(onboardDateMs))
+                "Listed $withYear"
+            }
+            days >= 1L -> "Listed $dateStr • ${days}d ago"
+            hours >= 1L -> "Listed $dateStr • ${hours}h ago"
+            else -> "Listed $dateStr • ${totalMins}m ago"
+        }
+    }
 }
 
 data class ChartViewportState(

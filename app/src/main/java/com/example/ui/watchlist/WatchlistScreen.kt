@@ -71,6 +71,7 @@ import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.BullishContainer
 import com.example.ui.theme.BullishGreen
 import com.example.ui.theme.CanvasVoid
+import com.example.ui.theme.CyanInfo
 import com.example.ui.theme.ElevatedSurface
 import com.example.ui.theme.TabularMonoStyle
 import com.example.ui.theme.TextMuted
@@ -115,6 +116,7 @@ fun WatchlistScreen(
         )
 
         SortHeaderRow(
+            activeFilter = state.filter,
             sortField = state.sortField,
             sortAscending = state.sortAscending,
             onSortClick = viewModel::onSortClick
@@ -174,10 +176,15 @@ fun WatchlistScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = if (state.filter == WatchlistFilter.FAVORITES) {
-                            "No starred pairs yet. Tap the star icon next to any contract."
-                        } else {
-                            "No USD-M Futures pairs match \"${state.searchQuery}\""
+                        text = when {
+                            state.filter == WatchlistFilter.FAVORITES ->
+                                "No starred pairs yet. Tap the star icon next to any contract."
+                            state.filter == WatchlistFilter.NEW_LISTINGS && state.endpointMode == MarketEndpointMode.VISION_MIRROR ->
+                                "Spot mirror fallback does not include listing timestamps. Binance or Bybit Futures API is required for New & Upcoming listings."
+                            state.filter == WatchlistFilter.NEW_LISTINGS ->
+                                "No recent or upcoming Binance/Bybit listings found."
+                            else ->
+                                "No USD-M Futures pairs match \"${state.searchQuery}\""
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextMuted,
@@ -200,6 +207,7 @@ fun WatchlistScreen(
                         WatchlistRow(
                             item = item,
                             isSelected = item.contract.symbol.equals(selectedSymbol, ignoreCase = true),
+                            showListingTime = state.filter == WatchlistFilter.NEW_LISTINGS,
                             onClick = {
                                 if (onSelectSymbolWithContext != null) {
                                     onSelectSymbolWithContext(
@@ -412,6 +420,7 @@ private fun FilterChipsRow(
 
 @Composable
 private fun SortHeaderRow(
+    activeFilter: WatchlistFilter,
     sortField: WatchlistSortField,
     sortAscending: Boolean,
     onSortClick: (WatchlistSortField) -> Unit
@@ -426,13 +435,23 @@ private fun SortHeaderRow(
             modifier = Modifier.weight(1.35f),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            SortButton(
-                label = "Rank",
-                active = sortField == WatchlistSortField.MARKET_CAP,
-                ascending = sortAscending,
-                onClick = { onSortClick(WatchlistSortField.MARKET_CAP) },
-                alignment = Alignment.CenterStart
-            )
+            if (activeFilter == WatchlistFilter.NEW_LISTINGS) {
+                SortButton(
+                    label = "Listed",
+                    active = sortField == WatchlistSortField.LISTING_TIME,
+                    ascending = sortAscending,
+                    onClick = { onSortClick(WatchlistSortField.LISTING_TIME) },
+                    alignment = Alignment.CenterStart
+                )
+            } else {
+                SortButton(
+                    label = "Rank",
+                    active = sortField == WatchlistSortField.MARKET_CAP,
+                    ascending = sortAscending,
+                    onClick = { onSortClick(WatchlistSortField.MARKET_CAP) },
+                    alignment = Alignment.CenterStart
+                )
+            }
             Text(
                 text = "/",
                 style = MaterialTheme.typography.bodySmall,
@@ -506,18 +525,34 @@ private fun SortButton(
 private fun WatchlistRow(
     item: WatchlistItem,
     isSelected: Boolean,
+    showListingTime: Boolean = false,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit
 ) {
     val ticker = item.ticker
+    val nowMs = System.currentTimeMillis()
+    val isUpcoming = item.contract.isUpcomingListing(nowMs)
+    val isNewRecent = !isUpcoming && item.contract.isRecentlyListed(nowMs, 14)
+    val hasActivePrice = ticker != null && ticker.lastPrice > 0.0
     val changePct = ticker?.priceChangePercent24h ?: 0.0
     val isUp = changePct >= 0.0
-    val priceText = ticker?.let {
-        ChartNumberFormatter.formatPrice(it.lastPrice, item.contract.pricePrecision)
-    } ?: "--"
+    val priceText = if (hasActivePrice) {
+        ChartNumberFormatter.formatPrice(ticker!!.lastPrice, item.contract.pricePrecision)
+    } else if (isUpcoming) {
+        "Pre-Launch"
+    } else {
+        "--"
+    }
     val rank = item.displayRank ?: ticker?.marketCapRank
     val rankPrefix = rank?.let { "#$it • " } ?: ""
-    val volText = ticker?.let { ChartNumberFormatter.formatCompactVolume(it.quoteVolume24h) } ?: "--"
+    val volText = ticker?.takeIf { it.quoteVolume24h > 0.0 }?.let {
+        ChartNumberFormatter.formatCompactVolume(it.quoteVolume24h)
+    } ?: "--"
+    val listingSubtext = if (showListingTime || isUpcoming || isNewRecent) {
+        ChartNumberFormatter.formatListingSubtext(item.contract.onboardDate, item.contract.status, nowMs)
+    } else {
+        null
+    }
 
     Row(
         modifier = Modifier
@@ -572,6 +607,35 @@ private fun WatchlistRow(
                         )
                     }
                 }
+                if (isUpcoming) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(AmberGold.copy(alpha = 0.18f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "SOON",
+                            style = TabularMonoStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                            color = AmberGold
+                        )
+                    }
+                } else if (isNewRecent) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(CyanInfo.copy(alpha = 0.16f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "NEW",
+                            style = TabularMonoStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                            color = CyanInfo
+                        )
+                    }
+                }
             }
             Text(
                 text = "${rankPrefix}Vol: $volText",
@@ -580,12 +644,24 @@ private fun WatchlistRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            if (listingSubtext != null) {
+                Text(
+                    text = listingSubtext,
+                    style = TabularMonoStyle.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
+                    color = if (isUpcoming) AmberGold else CyanInfo,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
 
         Text(
             text = priceText,
-            style = TabularMonoStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
-            color = TextPrimary,
+            style = TabularMonoStyle.copy(
+                fontSize = if (!hasActivePrice && isUpcoming) 11.sp else 14.sp,
+                fontWeight = FontWeight.SemiBold
+            ),
+            color = if (!hasActivePrice && isUpcoming) AmberGold else TextPrimary,
             textAlign = TextAlign.End,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -602,14 +678,24 @@ private fun WatchlistRow(
                 modifier = Modifier
                     .width(74.dp)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(if (isUp) BullishContainer else BearishContainer)
+                    .background(
+                        when {
+                            !hasActivePrice && isUpcoming -> AmberGold.copy(alpha = 0.14f)
+                            isUp -> BullishContainer
+                            else -> BearishContainer
+                        }
+                    )
                     .padding(vertical = 6.dp, horizontal = 6.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = ChartNumberFormatter.formatPercent(changePct),
+                    text = if (!hasActivePrice && isUpcoming) "SOON" else ChartNumberFormatter.formatPercent(changePct),
                     style = TabularMonoStyle.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
-                    color = if (isUp) BullishGreen else BearishRed,
+                    color = when {
+                        !hasActivePrice && isUpcoming -> AmberGold
+                        isUp -> BullishGreen
+                        else -> BearishRed
+                    },
                     maxLines = 1
                 )
             }

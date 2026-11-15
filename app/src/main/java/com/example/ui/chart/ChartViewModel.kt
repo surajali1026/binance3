@@ -574,6 +574,14 @@ class ChartViewModel(
             )
             _isLoadingHistory.value = false
             fetchResult.onSuccess { list ->
+                if (list.isEmpty() && contract != null && contract.isUpcomingListing()) {
+                    _errorMessage.value = if (contract.onboardDate > 0L) {
+                        "Upcoming listing • Opens ${ChartNumberFormatter.formatListingSchedule(contract.onboardDate)}"
+                    } else {
+                        "Upcoming listing • Trading not started yet"
+                    }
+                    return@onSuccess
+                }
                 _candles.value = list
                 val stillUninitialized = _viewport.value.priceMax <= _viewport.value.priceMin ||
                     (_viewport.value.priceMin == 0.0 && _viewport.value.priceMax == 100.0)
@@ -591,7 +599,13 @@ class ChartViewModel(
                     )
                 }
             }.onFailure { err ->
-                if (source != PriceSource.LAST) {
+                if (contract != null && contract.isUpcomingListing()) {
+                    _errorMessage.value = if (contract.onboardDate > 0L) {
+                        "Upcoming listing • Trading opens ${ChartNumberFormatter.formatListingSchedule(contract.onboardDate)}"
+                    } else {
+                        "Upcoming listing • Trading has not started yet"
+                    }
+                } else if (source != PriceSource.LAST) {
                     _priceSource.value = PriceSource.LAST
                     _noticeMessage.value = "${source.label} unavailable in this region/server; showing Last Price"
                     persistChartState()
