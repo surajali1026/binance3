@@ -345,7 +345,9 @@ fun LightweightChartView(
         state.rangeMeasurement,
         state.activeTool,
         state.replayState.isPickingStart,
-        state.axisQuickAlertPrice
+        state.axisQuickAlertPrice,
+        state.preferences.showTbtSmc,
+        state.tbtSmc
     ) {
         val root = JSONObject()
         val lines = JSONArray()
@@ -431,6 +433,36 @@ fun LightweightChartView(
                 put("label", label)
             })
         }
+        val tbtObj = JSONObject().apply {
+            put("enabled", state.preferences.showTbtSmc)
+            val mArr = JSONArray()
+            if (state.preferences.showTbtSmc) {
+                state.tbtSmc.markers.forEach { m ->
+                    mArr.put(JSONObject().apply {
+                        put("time", m.timeMillis / 1000L)
+                        put("position", m.position)
+                        put("color", m.colorHex)
+                        put("shape", m.shape)
+                        put("text", m.text)
+                    })
+                }
+            }
+            put("markers", mArr)
+            val pArr = JSONArray()
+            if (state.preferences.showTbtSmc) {
+                state.tbtSmc.priceLines.forEach { pl ->
+                    pArr.put(JSONObject().apply {
+                        put("price", pl.price)
+                        put("title", pl.title)
+                        put("color", pl.colorHex)
+                        put("lineStyle", pl.lineStyle)
+                        put("lineWidth", pl.lineWidth)
+                    })
+                }
+            }
+            put("priceLines", pArr)
+        }
+        root.put("tbtSmc", tbtObj)
         root.toString()
     }
 
@@ -455,6 +487,9 @@ fun LightweightChartView(
                 }
                 if (ov.has("rangeMeasurement")) {
                     put("rangeMeasurement", ov.optJSONObject("rangeMeasurement"))
+                }
+                if (ov.has("tbtSmc")) {
+                    put("tbtSmc", ov.optJSONObject("tbtSmc"))
                 }
                 tracker.lastOverlayJson = overlayJson
             }

@@ -548,4 +548,139 @@ class ChartAndWatchlistUiTest {
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("RECENTUSDT").assertIsDisplayed()
     }
+
+    @Test
+    fun `tbt smc toggle button and layer settings menu work across portrait and landscape bars`() {
+        var mainToggled = 0
+        var zonesToggled = 0
+        var powerToggled = 0
+        var overlapToggled = 0
+        var signalsToggled = 0
+        var hudToggled = 0
+
+        val state = ChartUiState(
+            symbol = "BTCUSDT",
+            contract = FuturesContract("BTCUSDT", "BTCUSDT", "BTC", "USDT", 2, 3, 0.1, "PERPETUAL", "TRADING"),
+            preferences = com.example.domain.model.ChartPreferences(showTbtSmc = true)
+        )
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                androidx.compose.foundation.layout.Column {
+                    com.example.ui.chart.ChartTimeframeStrip(
+                        state = state,
+                        onSelectTimeframe = {},
+                        onOpenTimeframePicker = {},
+                        onAutoFit = {},
+                        onStartReplay = {},
+                        onToggleTbtSmc = { mainToggled++ },
+                        onToggleTbtZones = { zonesToggled++ },
+                        onToggleTbtPowerShift = { powerToggled++ },
+                        onToggleTbtOverlap = { overlapToggled++ },
+                        onToggleTbtSignals = { signalsToggled++ },
+                        onToggleTbtHud = { hudToggled++ }
+                    )
+                    com.example.ui.chart.TbtConditionHudBadge(
+                        summary = com.example.domain.indicator.TbtConditionSummary(
+                            bias = com.example.domain.indicator.TbtMarketBias.BULLISH,
+                            activeBullPower = 91250.5,
+                            activeBearPower = null,
+                            lastSignal = "3CR BUY Confirmed"
+                        ),
+                        precision = 2
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        // Floating HUD displays bias, power level, and last signal
+        composeTestRule.onNodeWithTag("tbt_condition_hud").assertIsDisplayed()
+        composeTestRule.onNodeWithText("BULLISH").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Bull Pwr: 91,250.50").assertIsDisplayed()
+        composeTestRule.onNodeWithText("3CR BUY Confirmed").assertIsDisplayed()
+
+        // 1-click toggle works
+        composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
+        assertEquals(1, mainToggled)
+
+        // Settings popover opens and toggles all 5 layers
+        composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("tbt_smc_settings_menu").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("tbt_layer_zones").performClick()
+        composeTestRule.onNodeWithTag("tbt_layer_power_shift").performClick()
+        composeTestRule.onNodeWithTag("tbt_layer_overlap").performClick()
+        composeTestRule.onNodeWithTag("tbt_layer_signals").performClick()
+        composeTestRule.onNodeWithTag("tbt_layer_hud").performClick()
+        assertEquals(1, zonesToggled)
+        assertEquals(1, powerToggled)
+        assertEquals(1, overlapToggled)
+        assertEquals(1, signalsToggled)
+        assertEquals(1, hudToggled)
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h400dp-land")
+    fun `fullscreen landscape bar exposes tbt smc controls`() {
+        var toggled = false
+        val state = ChartUiState(
+            symbol = "ETHUSDT",
+            contract = FuturesContract("ETHUSDT", "ETHUSDT", "ETH", "USDT", 2, 3, 0.01, "PERPETUAL", "TRADING"),
+            isFullScreen = true
+        )
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                com.example.ui.chart.FullScreenTimeframeBar(
+                    state = state,
+                    onOpenCoinSwitcher = {},
+                    onSelectPriceSource = {},
+                    onSelectTimeframe = {},
+                    onOpenTimeframePicker = {},
+                    onAutoFit = {},
+                    onStartReplay = {},
+                    onToggleTbtSmc = { toggled = true },
+                    onExitFullScreen = {},
+                    modifier = Modifier.size(width = 760.dp, height = 40.dp)
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
+        composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed()
+        assertEquals(true, toggled)
+    }
+
+    @Test
+    fun `portrait fullscreen bar exposes tbt smc controls`() {
+        var toggled = false
+        val state = ChartUiState(
+            symbol = "BTCUSDT",
+            contract = FuturesContract("BTCUSDT", "BTCUSDT", "BTC", "USDT", 2, 3, 0.1, "PERPETUAL", "TRADING"),
+            isFullScreen = true
+        )
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                com.example.ui.chart.FullScreenTimeframeBar(
+                    state = state,
+                    onOpenCoinSwitcher = {},
+                    onSelectPriceSource = {},
+                    onSelectTimeframe = {},
+                    onOpenTimeframePicker = {},
+                    onAutoFit = {},
+                    onStartReplay = {},
+                    onToggleTbtSmc = { toggled = true },
+                    onExitFullScreen = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
+        composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed()
+        assertEquals(true, toggled)
+    }
 }

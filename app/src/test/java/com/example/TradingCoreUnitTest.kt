@@ -494,4 +494,74 @@ class TradingCoreUnitTest {
         assertNotNull(recentText)
         assertTrue(recentText!!.contains("Listed") && recentText.contains("3d ago"))
     }
+
+    @Test
+    fun `tbt smc engine handles insufficient candles and detects demand zone power shift 3cr and bias`() {
+        val step = 900_000L
+        val baseTime = 1_750_000_000_000L
+
+        fun bar(idx: Int, o: Double, h: Double, l: Double, c: Double) = Candle(
+            openTime = baseTime + idx * step,
+            closeTime = baseTime + idx * step + step - 1L,
+            open = o,
+            high = h,
+            low = l,
+            close = c,
+            volume = 1000.0,
+            isClosed = true
+        )
+
+        // 1. Less than 25 candles -> Waiting for data
+        val shortList = (0 until 20).map { i -> bar(i, 100.0, 101.0, 99.0, 100.5) }
+        val shortOut = com.example.domain.indicator.TbtSmcEngine.calculate(shortList)
+        assertTrue(shortOut.markers.isEmpty())
+        assertTrue(shortOut.priceLines.isEmpty())
+        assertEquals(com.example.domain.indicator.TbtMarketBias.SIDEWAYS, shortOut.summary.bias)
+        assertEquals("Waiting for data...", shortOut.summary.lastSignal)
+
+        // 2. Construct deterministic sequence >= 28 candles:
+        // Bars 0..15: tight range around 100 (avg body ~0.6)
+        val candles = mutableListOf<Candle>()
+        for (i in 0..15) {
+            val o = 100.0
+            val c = if (i % 2 == 0) 100.6 else 99.4
+            candles.add(bar(i, o, 101.0, 99.0, c))
+        }
+        // Bar 16: small bearish base candle (body = 0.2 < avgBody*0.9)
+        candles.add(bar(16, 100.0, 100.2, 99.5, 99.8))
+        // Bar 17: huge bullish impulse (body = 4.2 > avgBody*1.3, close 104.3 > c1.high 100.2) -> DBR Demand (top=100.0, bottom=99.5)
+        candles.add(bar(17, 100.1, 104.3, 100.1, 104.3))
+        // Bar 18..20: drift above zone
+        candles.add(bar(18, 104.0, 104.4, 103.0, 103.5))
+        candles.add(bar(19, 103.5, 103.8, 102.0, 102.2))
+        // Bar 20: taps demand zone (low 99.6 <= 100.0 and close 101.0 > bottom 99.5) -> sets activeBullPower = 99.6
+        candles.add(bar(20, 102.0, 102.2, 99.6, 101.0))
+        // Bar 21..24: 3CR BUY setup (bar 21 bearish, bar 22 sweeps low, bar 23 closes > max(c1.high, c2.high) opening cleanly above base top) & rally for BULLISH bias
+        candles.add(bar(21, 101.5, 102.0, 100.5, 100.6))
+        candles.add(bar(22, 100.6, 101.5, 100.1, 101.2))
+        candles.add(bar(23, 101.3, 105.5, 101.3, 105.0))
+        candles.add(bar(24, 105.0, 108.0, 104.8, 107.8))
+        candles.add(bar(25, 107.8, 110.0, 107.5, 109.5))
+
+        val fullOut = com.example.domain.indicator.TbtSmcEngine.calculate(candles)
+        assertTrue(fullOut.zones.any { it.type == com.example.domain.indicator.TbtZoneType.DEMAND && it.tapped })
+        assertTrue(fullOut.priceLines.any { it.title.contains("Demand") && it.title.contains("Tapped") })
+        assertTrue(fullOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.POWER_SHIFT })
+        assertEquals(99.6, fullOut.summary.activeBullPower!!, 0.0001)
+        assertTrue(fullOut.markers.any { it.text == "3CR BUY" })
+        assertEquals(com.example.domain.indicator.TbtMarketBias.BULLISH, fullOut.summary.bias)
+
+        // 3. Respects layer toggles (zones & signals hidden)
+        val filteredOut = com.example.domain.indicator.TbtSmcEngine.calculate(
+            candles,
+            com.example.domain.indicator.TbtSmcConfig(
+                showZones = false,
+                showPowerShift = false,
+                showOverlap = false,
+                showSignals = false
+            )
+        )
+        assertTrue(filteredOut.priceLines.isEmpty())
+        assertTrue(filteredOut.markers.isEmpty())
+    }
 }

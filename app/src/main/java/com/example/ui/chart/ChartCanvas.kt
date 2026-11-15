@@ -489,6 +489,78 @@ fun ChartCanvas(
                         }
                     }
 
+                    // 2b. TBT SMC Price Lines & Markers (fallback Canvas rendering)
+                    if (state.preferences.showTbtSmc) {
+                        state.tbtSmc.priceLines.forEach { pl ->
+                            val py = mapper.priceToY(pl.price)
+                            if (py in -10f..(height + 10f)) {
+                                val lineColor = parseTbtColor(pl.colorHex)
+                                val effect = when (pl.lineStyle) {
+                                    1 -> PathEffect.dashPathEffect(floatArrayOf(4f, 6f), 0f)
+                                    2 -> PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+                                    else -> null
+                                }
+                                drawLine(
+                                    color = lineColor,
+                                    start = Offset(0f, py),
+                                    end = Offset(width, py),
+                                    strokeWidth = (pl.lineWidth * 1.4f).coerceIn(1.2f, 4f),
+                                    pathEffect = effect
+                                )
+                                if (pl.title.isNotBlank()) {
+                                    val mTitle = textMeasurer.measure(
+                                        text = pl.title,
+                                        style = TabularMonoStyle.copy(
+                                            color = lineColor,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    )
+                                    val tx = (width - mTitle.size.width - 8f).coerceAtLeast(4f)
+                                    val ty = (py - mTitle.size.height - 2f).coerceIn(2f, (height - mTitle.size.height - 2f).coerceAtLeast(2f))
+                                    drawText(textLayoutResult = mTitle, topLeft = Offset(tx, ty))
+                                }
+                            }
+                        }
+
+                        if (candles.isNotEmpty() && !visibleRange.isEmpty()) {
+                            val timeToIndex = HashMap<Long, Int>(candles.size)
+                            for (idx in visibleRange) {
+                                timeToIndex[candles[idx].openTime] = idx
+                            }
+                            state.tbtSmc.markers.forEach { marker ->
+                                val idx = timeToIndex[marker.timeMillis] ?: return@forEach
+                                val c = candles[idx]
+                                val cx = mapper.indexToX(idx.toFloat())
+                                val isAbove = marker.position == "aboveBar"
+                                val anchorY = if (isAbove) {
+                                    (mapper.priceToY(c.high) - 10f).coerceAtLeast(10f)
+                                } else {
+                                    (mapper.priceToY(c.low) + 10f).coerceAtMost(height - 10f)
+                                }
+                                val mColor = parseTbtColor(marker.colorHex)
+                                drawCircle(color = mColor, radius = 4.5f, center = Offset(cx, anchorY))
+                                if (marker.text.isNotBlank()) {
+                                    val measured = textMeasurer.measure(
+                                        text = marker.text,
+                                        style = TabularMonoStyle.copy(
+                                            color = mColor,
+                                            fontSize = 8.5.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    )
+                                    val lx = (cx - measured.size.width / 2f).coerceIn(2f, (width - measured.size.width - 2f).coerceAtLeast(2f))
+                                    val ly = if (isAbove) {
+                                        (anchorY - measured.size.height - 4f).coerceAtLeast(2f)
+                                    } else {
+                                        (anchorY + 5f).coerceAtMost((height - measured.size.height - 2f).coerceAtLeast(2f))
+                                    }
+                                    drawText(textLayoutResult = measured, topLeft = Offset(lx, ly))
+                                }
+                            }
+                        }
+                    }
+
                     // 3. Drawings (Horizontal Line, Rectangle, Trendline)
                     state.drawings.forEach { drawing ->
                         val isSelected = drawing.id == state.selectedDrawingId
@@ -1015,4 +1087,27 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawChartDrawing(
             }
         }
     }
+}
+
+private fun parseTbtColor(raw: String): Color {
+    val trimmed = raw.trim()
+    if (trimmed.startsWith("#")) {
+        val hex = trimmed.removePrefix("#")
+        return when (hex.length) {
+            6 -> Color((0xFF000000L or (hex.toLongOrNull(16) ?: 0xF0B90BL)).toInt())
+            8 -> Color((hex.toLongOrNull(16) ?: 0xFFF0B90BL).toInt())
+            else -> AmberGold
+        }
+    }
+    if (trimmed.startsWith("rgba(", ignoreCase = true) && trimmed.endsWith(")")) {
+        val parts = trimmed.substring(5, trimmed.length - 1).split(",")
+        if (parts.size >= 4) {
+            val r = parts[0].trim().toIntOrNull()?.coerceIn(0, 255) ?: 0
+            val g = parts[1].trim().toIntOrNull()?.coerceIn(0, 255) ?: 200
+            val b = parts[2].trim().toIntOrNull()?.coerceIn(0, 255) ?: 83
+            val a = parts[3].trim().toFloatOrNull()?.coerceIn(0f, 1f) ?: 0.5f
+            return Color(red = r / 255f, green = g / 255f, blue = b / 255f, alpha = a)
+        }
+    }
+    return AmberGold
 }

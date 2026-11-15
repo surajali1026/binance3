@@ -298,6 +298,8 @@ body.immersive-landscape{
         });
 
         let lines = [];
+        let tbtPriceLines = [];
+        let tbtMarkersPlugin = null;
         let hasInitialData = false;
         let lastCandleTime = null;
         let lastCandleCount = 0;
@@ -310,6 +312,7 @@ body.immersive-landscape{
         let lastKnownClose = 0;
         let lastKnownBull = true;
         let previousLinesSig = '';
+        let previousTbtSig = '';
         let activeDrawings = [];
         let activeAlerts = [];
         let pendingPoints = [];
@@ -799,6 +802,77 @@ body.immersive-landscape{
             }
         }
 
+        function clearTbtPriceLines(){
+            for(let i = 0; i < tbtPriceLines.length; i++){
+                try{ candles.removePriceLine(tbtPriceLines[i]); }catch(_){}
+            }
+            tbtPriceLines = [];
+        }
+
+        function setTbtMarkersCompat(markerList){
+            try{
+                if(typeof LightweightCharts.createSeriesMarkers === 'function'){
+                    if(!tbtMarkersPlugin){
+                        tbtMarkersPlugin = LightweightCharts.createSeriesMarkers(candles, markerList);
+                    } else {
+                        tbtMarkersPlugin.setMarkers(markerList);
+                    }
+                } else if(candles && typeof candles.setMarkers === 'function'){
+                    candles.setMarkers(markerList);
+                }
+            }catch(err){
+                if(window.AndroidChart) AndroidChart.onError('TBT marker error: ' + err);
+            }
+        }
+
+        function mapTbtLineStyle(styleInt){
+            if(styleInt === 1) return LightweightCharts.LineStyle.Dotted;
+            if(styleInt === 2) return LightweightCharts.LineStyle.Dashed;
+            return LightweightCharts.LineStyle.Solid;
+        }
+
+        function syncTbtSmc(tbtData){
+            const sig = JSON.stringify(tbtData || null);
+            if(sig === previousTbtSig) return;
+            previousTbtSig = sig;
+            clearTbtPriceLines();
+            if(!tbtData || !tbtData.enabled){
+                setTbtMarkersCompat([]);
+                return;
+            }
+            const rawMarkers = Array.isArray(tbtData.markers) ? tbtData.markers : [];
+            const validMarkers = [];
+            for(let i = 0; i < rawMarkers.length; i++){
+                const m = rawMarkers[i];
+                if(m && Number.isFinite(Number(m.time))){
+                    validMarkers.push({
+                        time: Number(m.time),
+                        position: m.position || 'aboveBar',
+                        color: m.color || '#f0b90b',
+                        shape: m.shape || 'circle',
+                        text: m.text || ''
+                    });
+                }
+            }
+            setTbtMarkersCompat(validMarkers);
+
+            const rawLines = Array.isArray(tbtData.priceLines) ? tbtData.priceLines : [];
+            for(let i = 0; i < rawLines.length; i++){
+                const pl = rawLines[i];
+                const price = Number(pl && pl.price);
+                if(Number.isFinite(price) && price > 0){
+                    tbtPriceLines.push(candles.createPriceLine({
+                        price: price,
+                        color: pl.color || '#00c853',
+                        lineWidth: pl.lineWidth || 1,
+                        lineStyle: mapTbtLineStyle(pl.lineStyle),
+                        axisLabelVisible: true,
+                        title: pl.title || ''
+                    }));
+                }
+            }
+        }
+
         function toBar(x){
             if(!x) return null;
             const time = Number(x.time);
@@ -863,6 +937,9 @@ body.immersive-landscape{
                         : null;
                     updateQuickGuideLine();
                 }
+                if(d.tbtSmc !== undefined){
+                    syncTbtSmc(d.tbtSmc);
+                }
                 schedulePaintDrawings();
             }catch(e){
                 if(window.AndroidChart) AndroidChart.onError(String(e));
@@ -916,6 +993,9 @@ body.immersive-landscape{
                         ? Number(d.quickAlertPrice)
                         : null;
                     updateQuickGuideLine();
+                }
+                if(d.tbtSmc !== undefined){
+                    syncTbtSmc(d.tbtSmc);
                 }
                 schedulePaintDrawings();
             }catch(e){

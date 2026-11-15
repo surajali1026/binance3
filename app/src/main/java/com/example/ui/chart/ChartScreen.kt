@@ -159,6 +159,12 @@ fun ChartScreen(
                 onOpenTimeframePicker = { showTimeframePicker = true },
                 onAutoFit = viewModel::triggerAutoFit,
                 onStartReplay = viewModel::startBarReplayPicker,
+                onToggleTbtSmc = viewModel::toggleTbtSmc,
+                onToggleTbtZones = viewModel::toggleTbtZones,
+                onToggleTbtPowerShift = viewModel::toggleTbtPowerShift,
+                onToggleTbtOverlap = viewModel::toggleTbtOverlap,
+                onToggleTbtSignals = viewModel::toggleTbtSignals,
+                onToggleTbtHud = viewModel::toggleTbtHud,
                 onExitFullScreen = {
                     if (state.isFullScreen) {
                         viewModel.toggleFullScreen()
@@ -187,7 +193,13 @@ fun ChartScreen(
                 onSelectTimeframe = viewModel::selectTimeframe,
                 onOpenTimeframePicker = { showTimeframePicker = true },
                 onAutoFit = viewModel::triggerAutoFit,
-                onStartReplay = viewModel::startBarReplayPicker
+                onStartReplay = viewModel::startBarReplayPicker,
+                onToggleTbtSmc = viewModel::toggleTbtSmc,
+                onToggleTbtZones = viewModel::toggleTbtZones,
+                onToggleTbtPowerShift = viewModel::toggleTbtPowerShift,
+                onToggleTbtOverlap = viewModel::toggleTbtOverlap,
+                onToggleTbtSignals = viewModel::toggleTbtSignals,
+                onToggleTbtHud = viewModel::toggleTbtHud
             )
         }
 
@@ -245,6 +257,25 @@ fun ChartScreen(
                     .align(Alignment.CenterStart)
                     .padding(start = 8.dp)
             )
+
+            // Top-Right TBT Real SMC Market Condition HUD Badge
+            if (state.preferences.showTbtSmc &&
+                state.preferences.tbtShowHud &&
+                state.displayedCandles.isNotEmpty()
+            ) {
+                val hudTopOffset = when {
+                    state.crosshair.isActive -> 50.dp
+                    state.rangeMeasurement != null -> 44.dp
+                    else -> 8.dp
+                }
+                TbtConditionHudBadge(
+                    summary = state.tbtSmc.summary,
+                    precision = state.contract?.pricePrecision ?: 2,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = hudTopOffset, end = 74.dp)
+                )
+            }
 
             // Floating Crosshair OHLCV HUD (overlaid so chart height never jumps)
             if (state.crosshair.isActive) {

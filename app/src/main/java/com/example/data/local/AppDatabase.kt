@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.domain.model.Timeframe
 import kotlinx.coroutines.CoroutineScope
@@ -19,7 +20,7 @@ import kotlinx.coroutines.launch
         AlertHistoryEntity::class,
         ChartPreferencesEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -33,6 +34,17 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN showTbtSmc INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtShowZones INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtShowPowerShift INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtShowOverlap INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtShowSignals INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtShowHud INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: buildDatabase(context.applicationContext).also { INSTANCE = it }
@@ -44,7 +56,8 @@ abstract class AppDatabase : RoomDatabase() {
                 context,
                 AppDatabase::class.java,
                 "binance_pro.db"
-            ).addCallback(object : Callback() {
+            ).addMigrations(MIGRATION_1_2)
+                .addCallback(object : Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {
                     super.onCreate(db)
                     CoroutineScope(Dispatchers.IO).launch {

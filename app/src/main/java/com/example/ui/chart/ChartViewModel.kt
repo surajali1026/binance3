@@ -27,11 +27,14 @@ import com.example.domain.model.PriceRangeMeasurement
 import com.example.domain.model.PriceSource
 import com.example.domain.model.TickerSnapshot
 import com.example.domain.model.Timeframe
+import com.example.domain.indicator.TbtSmcEngine
+import com.example.domain.indicator.TbtSmcOutput
 import com.example.domain.model.WatchlistItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -40,6 +43,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
@@ -109,6 +113,7 @@ data class ChartUiState(
     val rangeMeasurement: PriceRangeMeasurement? = null,
     val replayState: BarReplayState = BarReplayState(),
     val preferences: ChartPreferences = ChartPreferences(),
+    val tbtSmc: TbtSmcOutput = TbtSmcOutput.EMPTY,
     val isFullScreen: Boolean = false,
     val switcherItems: List<WatchlistItem> = emptyList(),
     val navigationSymbols: List<String> = emptyList(),
@@ -317,6 +322,23 @@ class ChartViewModel(
         val contextLabel: String
     )
 
+    private val tbtSmcFlow: Flow<TbtSmcOutput> = combine(
+        _candles,
+        _replayState,
+        chartStateRepository.preferences
+    ) { candles, replay, prefs ->
+        if (!prefs.showTbtSmc) {
+            TbtSmcOutput.EMPTY
+        } else {
+            val displayed = if (replay.isActive && replay.cutoffIndex in candles.indices) {
+                candles.subList(0, replay.cutoffIndex + 1)
+            } else {
+                candles
+            }
+            TbtSmcEngine.calculate(displayed, prefs.toTbtSmcConfig())
+        }
+    }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
     val uiState: StateFlow<ChartUiState> = combine(
         coreMarketFlow,
         interactionFlow,
@@ -333,7 +355,8 @@ class ChartViewModel(
         chartStateRepository.activeAlerts,
         chartStateRepository.alertHistory,
         chartStateRepository.preferences,
-        switcherItemsFlow
+        switcherItemsFlow,
+        tbtSmcFlow
     ) { arr ->
         val market = arr[0] as CoreMarketSlice
         val ui = arr[1] as InteractionSlice
@@ -351,6 +374,7 @@ class ChartViewModel(
         val prefs = arr[9] as ChartPreferences
         @Suppress("UNCHECKED_CAST")
         val switcherItems = arr[10] as List<WatchlistItem>
+        val tbtSmc = arr[11] as TbtSmcOutput
 
         val activeTf = market.allTfs.firstOrNull { it.id == market.tfId }
             ?: market.allTfs.firstOrNull { it.id == "15m" }
@@ -391,6 +415,7 @@ class ChartViewModel(
             rangeMeasurement = ui.rangeMeasure,
             replayState = ui.replay,
             preferences = prefs,
+            tbtSmc = tbtSmc,
             isFullScreen = ui.isFullScreen,
             switcherItems = switcherItems,
             navigationSymbols = navSymbols,
@@ -1288,6 +1313,30 @@ class ChartViewModel(
         viewModelScope.launch {
             chartStateRepository.updatePreferences(transform)
         }
+    }
+
+    fun toggleTbtSmc() {
+        updatePreferences { it.copy(showTbtSmc = !it.showTbtSmc) }
+    }
+
+    fun toggleTbtZones() {
+        updatePreferences { it.copy(tbtShowZones = !it.tbtShowZones) }
+    }
+
+    fun toggleTbtPowerShift() {
+        updatePreferences { it.copy(tbtShowPowerShift = !it.tbtShowPowerShift) }
+    }
+
+    fun toggleTbtOverlap() {
+        updatePreferences { it.copy(tbtShowOverlap = !it.tbtShowOverlap) }
+    }
+
+    fun toggleTbtSignals() {
+        updatePreferences { it.copy(tbtShowSignals = !it.tbtShowSignals) }
+    }
+
+    fun toggleTbtHud() {
+        updatePreferences { it.copy(tbtShowHud = !it.tbtShowHud) }
     }
 
     private fun persistChartState() {

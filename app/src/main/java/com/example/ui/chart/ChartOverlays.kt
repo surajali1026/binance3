@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.HorizontalRule
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -51,7 +52,11 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -74,6 +79,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.remote.SocketConnectionState
+import com.example.domain.indicator.TbtConditionSummary
+import com.example.domain.indicator.TbtMarketBias
+import com.example.domain.indicator.TbtSmcConfig
 import com.example.domain.model.ChartDrawing
 import com.example.domain.model.DrawingTool
 import com.example.domain.model.DrawingType
@@ -445,21 +453,27 @@ fun ChartTimeframeStrip(
     onSelectTimeframe: (String) -> Unit,
     onOpenTimeframePicker: () -> Unit,
     onAutoFit: () -> Unit,
-    onStartReplay: () -> Unit
+    onStartReplay: () -> Unit,
+    onToggleTbtSmc: () -> Unit = {},
+    onToggleTbtZones: () -> Unit = {},
+    onToggleTbtPowerShift: () -> Unit = {},
+    onToggleTbtOverlap: () -> Unit = {},
+    onToggleTbtSignals: () -> Unit = {},
+    onToggleTbtHud: () -> Unit = {}
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(34.dp)
             .background(CanvasVoid)
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(
             modifier = Modifier
                 .weight(1f)
                 .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             val favs = state.favoriteTimeframes
@@ -473,7 +487,7 @@ fun ChartTimeframeStrip(
                         .clip(RoundedCornerShape(6.dp))
                         .background(if (selected) ToolbarSurface else Color.Transparent)
                         .clickable { onSelectTimeframe(tf.id) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(horizontal = 7.dp, vertical = 4.dp)
                         .testTag("tf_chip_${tf.id}")
                 ) {
                     Text(
@@ -493,7 +507,7 @@ fun ChartTimeframeStrip(
                     .background(ElevatedSurface)
                     .border(0.5.dp, BorderSubtle, RoundedCornerShape(6.dp))
                     .clickable(onClick = onOpenTimeframePicker)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .padding(horizontal = 7.dp, vertical = 4.dp)
                     .testTag("open_timeframe_picker")
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -513,16 +527,30 @@ fun ChartTimeframeStrip(
             }
         }
 
+        Spacer(modifier = Modifier.width(4.dp))
+
+        // 1-Click TBT SMC Toggle + Layer Settings Popover
+        TbtSmcControls(
+            showTbtSmc = state.preferences.showTbtSmc,
+            config = state.preferences.toTbtSmcConfig(),
+            onToggleMain = onToggleTbtSmc,
+            onToggleZones = onToggleTbtZones,
+            onTogglePowerShift = onToggleTbtPowerShift,
+            onToggleOverlap = onToggleTbtOverlap,
+            onToggleSignals = onToggleTbtSignals,
+            onToggleHud = onToggleTbtHud
+        )
+
+        Spacer(modifier = Modifier.width(2.dp))
+
         // Quick Price Reset / Auto-Fit & Bar Replay triggers
-        Row(
+        Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
                 .background(if (!state.viewport.isAutoFit) AmberGold.copy(alpha = 0.14f) else Color.Transparent)
                 .clickable(onClick = onAutoFit)
-                .padding(horizontal = 7.dp, vertical = 4.dp)
-                .testTag("chart_autofit_button"),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                .padding(horizontal = 5.dp, vertical = 4.dp)
+                .testTag("chart_autofit_button")
         ) {
             Icon(
                 imageVector = Icons.Filled.FitScreen,
@@ -530,29 +558,256 @@ fun ChartTimeframeStrip(
                 tint = if (!state.viewport.isAutoFit) AmberGold else CyanInfo,
                 modifier = Modifier.size(15.dp)
             )
-            Text(
-                text = "Reset",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (!state.viewport.isAutoFit) AmberGold else TextMuted,
-                fontWeight = FontWeight.Medium,
-                fontSize = 10.sp
-            )
         }
 
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
                 .clickable(onClick = onStartReplay)
-                .padding(horizontal = 7.dp, vertical = 4.dp)
+                .padding(horizontal = 5.dp, vertical = 4.dp)
                 .testTag("chart_replay_button")
         ) {
             Icon(
                 imageVector = Icons.Filled.History,
                 contentDescription = "Bar Replay",
                 tint = if (state.replayState.isActive || state.replayState.isPickingStart) AmberGold else TextMuted,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(15.dp)
             )
         }
+    }
+}
+
+@Composable
+fun TbtSmcControls(
+    showTbtSmc: Boolean,
+    config: TbtSmcConfig,
+    onToggleMain: () -> Unit,
+    onToggleZones: () -> Unit,
+    onTogglePowerShift: () -> Unit,
+    onToggleOverlap: () -> Unit,
+    onToggleSignals: () -> Unit,
+    onToggleHud: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var settingsExpanded by remember { mutableStateOf(false) }
+    val activeTint = BullishGreen
+    val pillBg = if (showTbtSmc) activeTint.copy(alpha = 0.16f) else ElevatedSurface
+    val pillBorder = if (showTbtSmc) activeTint.copy(alpha = 0.72f) else BorderSubtle
+    val contentTint = if (showTbtSmc) activeTint else TextMuted
+
+    Box(modifier = modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp))
+                    .background(pillBg)
+                    .border(0.75.dp, pillBorder, RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp))
+                    .clickable(onClick = onToggleMain)
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .testTag("tbt_smc_toggle_button"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Icon(
+                    imageVector = if (showTbtSmc) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                    contentDescription = if (showTbtSmc) "Hide TBT SMC" else "Show TBT SMC",
+                    tint = contentTint,
+                    modifier = Modifier.size(13.dp)
+                )
+                Text(
+                    text = "TBT SMC",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = contentTint,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 9.5.sp,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
+                    .background(if (settingsExpanded) AmberGold.copy(alpha = 0.16f) else ElevatedSurface)
+                    .border(
+                        0.75.dp,
+                        if (settingsExpanded) AmberGold else pillBorder,
+                        RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp)
+                    )
+                    .clickable { settingsExpanded = !settingsExpanded }
+                    .padding(horizontal = 5.dp, vertical = 4.dp)
+                    .testTag("tbt_smc_settings_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Layers,
+                    contentDescription = "TBT SMC Layer Settings",
+                    tint = if (settingsExpanded) AmberGold else contentTint,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = settingsExpanded,
+            onDismissRequest = { settingsExpanded = false },
+            containerColor = ElevatedSurface,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+                .border(0.75.dp, BorderSubtle, RoundedCornerShape(10.dp))
+                .testTag("tbt_smc_settings_menu")
+        ) {
+            Text(
+                text = "TBT Real SMC Layers",
+                style = MaterialTheme.typography.labelMedium,
+                color = AmberGold,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+            TbtLayerMenuItem(
+                label = "Zones (Demand / Supply)",
+                checked = config.showZones,
+                testTag = "tbt_layer_zones",
+                onClick = onToggleZones
+            )
+            TbtLayerMenuItem(
+                label = "Power Shift",
+                checked = config.showPowerShift,
+                testTag = "tbt_layer_power_shift",
+                onClick = onTogglePowerShift
+            )
+            TbtLayerMenuItem(
+                label = "Overlapping POI",
+                checked = config.showOverlap,
+                testTag = "tbt_layer_overlap",
+                onClick = onToggleOverlap
+            )
+            TbtLayerMenuItem(
+                label = "Signals (VI / Liq / 3CR)",
+                checked = config.showSignals,
+                testTag = "tbt_layer_signals",
+                onClick = onToggleSignals
+            )
+            TbtLayerMenuItem(
+                label = "Condition HUD",
+                checked = config.showHud,
+                testTag = "tbt_layer_hud",
+                onClick = onToggleHud
+            )
+        }
+    }
+}
+
+@Composable
+private fun TbtLayerMenuItem(
+    label: String,
+    checked: Boolean,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    DropdownMenuItem(
+        text = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Checkbox(
+                    checked = checked,
+                    onCheckedChange = null,
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = BullishGreen,
+                        checkmarkColor = CanvasVoid,
+                        uncheckedColor = TextMuted
+                    ),
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (checked) TextPrimary else TextMuted,
+                    fontWeight = if (checked) FontWeight.SemiBold else FontWeight.Normal,
+                    fontSize = 12.sp
+                )
+            }
+        },
+        onClick = onClick,
+        modifier = Modifier.testTag(testTag)
+    )
+}
+
+@Composable
+fun TbtConditionHudBadge(
+    summary: TbtConditionSummary,
+    precision: Int,
+    modifier: Modifier = Modifier
+) {
+    val biasColor = when (summary.bias) {
+        TbtMarketBias.BULLISH -> BullishGreen
+        TbtMarketBias.BEARISH -> BearishRed
+        TbtMarketBias.SIDEWAYS -> AmberGold
+    }
+    Column(
+        modifier = modifier
+            .widthIn(min = 128.dp, max = 188.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(ElevatedSurface.copy(alpha = 0.88f))
+            .border(0.75.dp, BorderSubtle, RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .testTag("tbt_condition_hud"),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "TBT SMC",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted,
+                fontWeight = FontWeight.Bold,
+                fontSize = 8.5.sp
+            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(biasColor.copy(alpha = 0.16f))
+                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    text = summary.bias.label,
+                    style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.Bold),
+                    color = biasColor
+                )
+            }
+        }
+        summary.activeBullPower?.let { bull ->
+            Text(
+                text = "Bull Pwr: ${ChartNumberFormatter.formatPrice(bull, precision)}",
+                style = TabularMonoStyle.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Medium),
+                color = Color(0xFFFFD600),
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+        summary.activeBearPower?.let { bear ->
+            Text(
+                text = "Bear Pwr: ${ChartNumberFormatter.formatPrice(bear, precision)}",
+                style = TabularMonoStyle.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Medium),
+                color = Color(0xFFFFD600),
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+        Text(
+            text = summary.lastSignal,
+            style = MaterialTheme.typography.bodySmall,
+            color = TextPrimary,
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -916,6 +1171,12 @@ fun FullScreenTimeframeBar(
     onOpenTimeframePicker: () -> Unit,
     onAutoFit: () -> Unit,
     onStartReplay: () -> Unit,
+    onToggleTbtSmc: () -> Unit = {},
+    onToggleTbtZones: () -> Unit = {},
+    onToggleTbtPowerShift: () -> Unit = {},
+    onToggleTbtOverlap: () -> Unit = {},
+    onToggleTbtSignals: () -> Unit = {},
+    onToggleTbtHud: () -> Unit = {},
     onExitFullScreen: () -> Unit,
     showBackToWatchlist: Boolean = false,
     onBackToWatchlist: () -> Unit = {},
@@ -1009,8 +1270,22 @@ fun FullScreenTimeframeBar(
     }
 
     @Composable
-    fun ActionButtonsCluster() {
+    fun ActionButtonsCluster(includeTbt: Boolean = true) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            if (includeTbt) {
+                TbtSmcControls(
+                    showTbtSmc = state.preferences.showTbtSmc,
+                    config = state.preferences.toTbtSmcConfig(),
+                    onToggleMain = onToggleTbtSmc,
+                    onToggleZones = onToggleTbtZones,
+                    onTogglePowerShift = onToggleTbtPowerShift,
+                    onToggleOverlap = onToggleTbtOverlap,
+                    onToggleSignals = onToggleTbtSignals,
+                    onToggleHud = onToggleTbtHud,
+                    modifier = Modifier.padding(end = 3.dp)
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
@@ -1177,10 +1452,10 @@ fun FullScreenTimeframeBar(
 
                 Spacer(modifier = Modifier.width(4.dp))
 
-                ActionButtonsCluster()
+                ActionButtonsCluster(includeTbt = true)
             }
         } else {
-            // Compact portrait full-screen layout: preserves full coin name, price selector dropdown, and timeframes without clipping
+            // Compact portrait full-screen layout: preserves full coin name, price selector dropdown, TBT SMC controls, and timeframes without clipping
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1228,14 +1503,30 @@ fun FullScreenTimeframeBar(
                         modifier = Modifier.padding(end = 2.dp)
                     )
 
-                    ActionButtonsCluster()
+                    ActionButtonsCluster(includeTbt = false)
                 }
 
-                TimeframeChipsAndMoreRow(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(30.dp)
-                )
+                        .height(30.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TimeframeChipsAndMoreRow(
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    TbtSmcControls(
+                        showTbtSmc = state.preferences.showTbtSmc,
+                        config = state.preferences.toTbtSmcConfig(),
+                        onToggleMain = onToggleTbtSmc,
+                        onToggleZones = onToggleTbtZones,
+                        onTogglePowerShift = onToggleTbtPowerShift,
+                        onToggleOverlap = onToggleTbtOverlap,
+                        onToggleSignals = onToggleTbtSignals,
+                        onToggleHud = onToggleTbtHud
+                    )
+                }
             }
         }
     }

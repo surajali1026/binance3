@@ -209,7 +209,13 @@ data class ChartPreferencesEntity(
     val loudSoundEnabled: Boolean = true,
     val vibrationEnabled: Boolean = true,
     val lastBarSpacingDp: Float = 9f,
-    val lastRightOffsetBars: Float = 8f
+    val lastRightOffsetBars: Float = 8f,
+    val showTbtSmc: Boolean = true,
+    val tbtShowZones: Boolean = true,
+    val tbtShowPowerShift: Boolean = true,
+    val tbtShowOverlap: Boolean = true,
+    val tbtShowSignals: Boolean = true,
+    val tbtShowHud: Boolean = true
 ) {
     fun toDomain(): ChartPreferences = ChartPreferences(
         lastSymbol = lastSymbol,
@@ -224,7 +230,13 @@ data class ChartPreferencesEntity(
         loudSoundEnabled = loudSoundEnabled,
         vibrationEnabled = vibrationEnabled,
         lastBarSpacingDp = lastBarSpacingDp,
-        lastRightOffsetBars = lastRightOffsetBars
+        lastRightOffsetBars = lastRightOffsetBars,
+        showTbtSmc = showTbtSmc,
+        tbtShowZones = tbtShowZones,
+        tbtShowPowerShift = tbtShowPowerShift,
+        tbtShowOverlap = tbtShowOverlap,
+        tbtShowSignals = tbtShowSignals,
+        tbtShowHud = tbtShowHud
     )
 
     companion object {
@@ -242,7 +254,13 @@ data class ChartPreferencesEntity(
             loudSoundEnabled = prefs.loudSoundEnabled,
             vibrationEnabled = prefs.vibrationEnabled,
             lastBarSpacingDp = prefs.lastBarSpacingDp,
-            lastRightOffsetBars = prefs.lastRightOffsetBars
+            lastRightOffsetBars = prefs.lastRightOffsetBars,
+            showTbtSmc = prefs.showTbtSmc,
+            tbtShowZones = prefs.tbtShowZones,
+            tbtShowPowerShift = prefs.tbtShowPowerShift,
+            tbtShowOverlap = prefs.tbtShowOverlap,
+            tbtShowSignals = prefs.tbtShowSignals,
+            tbtShowHud = prefs.tbtShowHud
         )
     }
 }

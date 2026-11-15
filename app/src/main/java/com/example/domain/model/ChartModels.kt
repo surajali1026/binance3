@@ -1,5 +1,7 @@
 package com.example.domain.model
 
+import com.example.domain.indicator.TbtSmcConfig
+
 enum class DrawingTool {
     NONE,
     HORIZONTAL_LINE,
@@ -96,8 +98,23 @@ data class ChartPreferences(
     val loudSoundEnabled: Boolean = true,
     val vibrationEnabled: Boolean = true,
     val lastBarSpacingDp: Float = 9f,
-    val lastRightOffsetBars: Float = 8f
-)
+    val lastRightOffsetBars: Float = 8f,
+    val showTbtSmc: Boolean = true,
+    val tbtShowZones: Boolean = true,
+    val tbtShowPowerShift: Boolean = true,
+    val tbtShowOverlap: Boolean = true,
+    val tbtShowSignals: Boolean = true,
+    val tbtShowHud: Boolean = true
+) {
+    fun toTbtSmcConfig(): TbtSmcConfig = TbtSmcConfig(
+        swingLen = 5,
+        showZones = tbtShowZones,
+        showPowerShift = tbtShowPowerShift,
+        showOverlap = tbtShowOverlap,
+        showSignals = tbtShowSignals,
+        showHud = tbtShowHud
+    )
+}
 
 data class BarReplayState(
     val isActive: Boolean = false,
