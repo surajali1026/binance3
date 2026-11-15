@@ -104,7 +104,9 @@ data class ChartPreferences(
     val tbtShowPowerShift: Boolean = true,
     val tbtShowOverlap: Boolean = true,
     val tbtShowSignals: Boolean = true,
-    val tbtShowHud: Boolean = true
+    val tbtShowHud: Boolean = true,
+    val tbtShowTradeSetup: Boolean = true,
+    val tbtUseMultiTimeframe: Boolean = true
 ) {
     fun toTbtSmcConfig(): TbtSmcConfig = TbtSmcConfig(
         swingLen = 5,
@@ -112,7 +114,9 @@ data class ChartPreferences(
         showPowerShift = tbtShowPowerShift,
         showOverlap = tbtShowOverlap,
         showSignals = tbtShowSignals,
-        showHud = tbtShowHud
+        showHud = tbtShowHud,
+        showTradeSetup = tbtShowTradeSetup,
+        useMultiTimeframe = tbtUseMultiTimeframe
     )
 }
 

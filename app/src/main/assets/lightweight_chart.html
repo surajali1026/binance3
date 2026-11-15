@@ -313,6 +313,8 @@ body.immersive-landscape{
         let lastKnownBull = true;
         let previousLinesSig = '';
         let previousTbtSig = '';
+        let tbtEnabled = false;
+        let tbtZones = [];
         let activeDrawings = [];
         let activeAlerts = [];
         let pendingPoints = [];
@@ -623,6 +625,37 @@ body.immersive-landscape{
             ctx.rect(0, 0, plotW, h);
             ctx.clip();
 
+            // Render TBT SMC Demand / Supply / FVG translucent zone boxes
+            if(tbtEnabled && tbtZones.length > 0){
+                for(let i = 0; i < tbtZones.length; i++){
+                    const z = tbtZones[i];
+                    const zx = resolveTimeToX(Number(z.startTime));
+                    const yTop = candles.priceToCoordinate(Number(z.top));
+                    const yBot = candles.priceToCoordinate(Number(z.bottom));
+                    if(zx == null || yTop == null || yBot == null) continue;
+                    const left = Math.max(0, Math.min(plotW, zx));
+                    const top = Math.min(yTop, yBot);
+                    const boxH = Math.max(2, Math.abs(yBot - yTop));
+                    const boxW = Math.max(4, plotW - left);
+                    if(z.type === 'DEMAND'){
+                        ctx.fillStyle = z.tapped ? 'rgba(0, 200, 83, 0.08)' : 'rgba(0, 200, 83, 0.14)';
+                        ctx.strokeStyle = 'rgba(0, 200, 83, 0.35)';
+                    } else if(z.type === 'SUPPLY'){
+                        ctx.fillStyle = z.tapped ? 'rgba(255, 23, 68, 0.08)' : 'rgba(255, 23, 68, 0.14)';
+                        ctx.strokeStyle = 'rgba(255, 23, 68, 0.35)';
+                    } else if(z.type === 'FVG_BULL'){
+                        ctx.fillStyle = 'rgba(0, 229, 255, 0.08)';
+                        ctx.strokeStyle = 'rgba(0, 229, 255, 0.25)';
+                    } else {
+                        ctx.fillStyle = 'rgba(255, 145, 0, 0.08)';
+                        ctx.strokeStyle = 'rgba(255, 145, 0, 0.25)';
+                    }
+                    ctx.fillRect(left, top, boxW, boxH);
+                    ctx.lineWidth = 0.8;
+                    ctx.strokeRect(left, top, boxW, boxH);
+                }
+            }
+
             for(let i = 0; i < activeDrawings.length; i++){
                 const d = activeDrawings[i];
                 const pts = d.points || [];
@@ -837,9 +870,13 @@ body.immersive-landscape{
             previousTbtSig = sig;
             clearTbtPriceLines();
             if(!tbtData || !tbtData.enabled){
+                tbtEnabled = false;
+                tbtZones = [];
                 setTbtMarkersCompat([]);
                 return;
             }
+            tbtEnabled = true;
+            tbtZones = Array.isArray(tbtData.zones) ? tbtData.zones : [];
             const rawMarkers = Array.isArray(tbtData.markers) ? tbtData.markers : [];
             const validMarkers = [];
             for(let i = 0; i < rawMarkers.length; i++){

@@ -1,6 +1,7 @@
 package com.example.ui.chart
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,6 +26,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ShowChart
@@ -82,6 +85,7 @@ import com.example.data.remote.SocketConnectionState
 import com.example.domain.indicator.TbtConditionSummary
 import com.example.domain.indicator.TbtMarketBias
 import com.example.domain.indicator.TbtSmcConfig
+import com.example.domain.indicator.TbtTradeDirection
 import com.example.domain.model.ChartDrawing
 import com.example.domain.model.DrawingTool
 import com.example.domain.model.DrawingType
@@ -459,7 +463,9 @@ fun ChartTimeframeStrip(
     onToggleTbtPowerShift: () -> Unit = {},
     onToggleTbtOverlap: () -> Unit = {},
     onToggleTbtSignals: () -> Unit = {},
-    onToggleTbtHud: () -> Unit = {}
+    onToggleTbtHud: () -> Unit = {},
+    onToggleTbtTradeSetup: () -> Unit = {},
+    onToggleTbtMtf: () -> Unit = {}
 ) {
     Row(
         modifier = Modifier
@@ -538,7 +544,9 @@ fun ChartTimeframeStrip(
             onTogglePowerShift = onToggleTbtPowerShift,
             onToggleOverlap = onToggleTbtOverlap,
             onToggleSignals = onToggleTbtSignals,
-            onToggleHud = onToggleTbtHud
+            onToggleHud = onToggleTbtHud,
+            onToggleTradeSetup = onToggleTbtTradeSetup,
+            onToggleMtf = onToggleTbtMtf
         )
 
         Spacer(modifier = Modifier.width(2.dp))
@@ -587,6 +595,8 @@ fun TbtSmcControls(
     onToggleOverlap: () -> Unit,
     onToggleSignals: () -> Unit,
     onToggleHud: () -> Unit,
+    onToggleTradeSetup: () -> Unit = {},
+    onToggleMtf: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var settingsExpanded by remember { mutableStateOf(false) }
@@ -683,10 +693,22 @@ fun TbtSmcControls(
                 onClick = onToggleOverlap
             )
             TbtLayerMenuItem(
-                label = "Signals (VI / Liq / 3CR)",
+                label = "Signals (BOS / Liq / 3CR)",
                 checked = config.showSignals,
                 testTag = "tbt_layer_signals",
                 onClick = onToggleSignals
+            )
+            TbtLayerMenuItem(
+                label = "Buy/Sell + TP/SL",
+                checked = config.showTradeSetup,
+                testTag = "tbt_layer_trade_setup",
+                onClick = onToggleTradeSetup
+            )
+            TbtLayerMenuItem(
+                label = "Multi-Timeframe (MTF)",
+                checked = config.useMultiTimeframe,
+                testTag = "tbt_layer_mtf",
+                onClick = onToggleMtf
             )
             TbtLayerMenuItem(
                 label = "Condition HUD",
@@ -739,52 +761,203 @@ private fun TbtLayerMenuItem(
 fun TbtConditionHudBadge(
     summary: TbtConditionSummary,
     precision: Int,
+    showTradeSetup: Boolean = true,
+    onQuickCreateAlert: ((Double) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    var expanded by remember { mutableStateOf(false) }
     val biasColor = when (summary.bias) {
         TbtMarketBias.BULLISH -> BullishGreen
         TbtMarketBias.BEARISH -> BearishRed
         TbtMarketBias.SIDEWAYS -> AmberGold
     }
+    val setup = summary.tradeSetup
+    val signalColor = when (setup.direction) {
+        TbtTradeDirection.BUY -> BullishGreen
+        TbtTradeDirection.SELL -> BearishRed
+        TbtTradeDirection.WAIT -> AmberGold
+    }
+
     Column(
         modifier = modifier
-            .widthIn(min = 128.dp, max = 188.dp)
+            .widthIn(min = 148.dp, max = if (expanded) 232.dp else 196.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(ElevatedSurface.copy(alpha = 0.88f))
+            .background(ElevatedSurface.copy(alpha = 0.90f))
             .border(0.75.dp, BorderSubtle, RoundedCornerShape(8.dp))
+            .clickable { expanded = !expanded }
+            .animateContentSize()
             .padding(horizontal = 8.dp, vertical = 6.dp)
             .testTag("tbt_condition_hud"),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "TBT SMC",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextMuted,
-                fontWeight = FontWeight.Bold,
-                fontSize = 8.5.sp
-            )
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(biasColor.copy(alpha = 0.16f))
-                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = summary.bias.label,
-                    style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.Bold),
-                    color = biasColor
+                    text = "TBT SMC",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 8.5.sp
                 )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(biasColor.copy(alpha = 0.16f))
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                ) {
+                    Text(
+                        text = summary.bias.label,
+                        style = TabularMonoStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                        color = biasColor
+                    )
+                }
+            }
+            Icon(
+                imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse TBT details" else "Expand TBT details",
+                tint = TextMuted,
+                modifier = Modifier
+                    .size(14.dp)
+                    .testTag("tbt_hud_expand_button")
+            )
+        }
+
+        // Compact MTF Trend Chips (e.g., 15m ▲ | 1H ▲ | 4H ▲)
+        if (summary.mtfBiases.isNotEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                summary.mtfBiases.forEach { tfInfo ->
+                    val tfColor = when (tfInfo.bias) {
+                        TbtMarketBias.BULLISH -> BullishGreen
+                        TbtMarketBias.BEARISH -> BearishRed
+                        TbtMarketBias.SIDEWAYS -> AmberGold
+                    }
+                    val arrow = when (tfInfo.bias) {
+                        TbtMarketBias.BULLISH -> "▲"
+                        TbtMarketBias.BEARISH -> "▼"
+                        TbtMarketBias.SIDEWAYS -> "◆"
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(tfColor.copy(alpha = 0.12f))
+                            .border(0.5.dp, tfColor.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "${tfInfo.timeframeLabel} $arrow",
+                            style = TabularMonoStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.SemiBold),
+                            color = tfColor,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
             }
         }
+
+        // Buy/Sell Actionable Signal + Entry / SL / TP1 / TP2 Levels
+        if (showTradeSetup) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(signalColor.copy(alpha = 0.22f))
+                            .padding(horizontal = 5.dp, vertical = 1.5.dp)
+                    ) {
+                        Text(
+                            text = setup.direction.label,
+                            style = TabularMonoStyle.copy(fontSize = 9.sp, fontWeight = FontWeight.ExtraBold),
+                            color = signalColor
+                        )
+                    }
+                    Text(
+                        text = "${setup.confidencePercent}%",
+                        style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.Bold),
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = setup.statusLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted,
+                        fontSize = 8.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            if (setup.direction != TbtTradeDirection.WAIT) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(CanvasVoid.copy(alpha = 0.65f))
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                        .testTag("tbt_trade_setup_levels"),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "EN ${ChartNumberFormatter.formatPrice(setup.entryPrice, precision)}",
+                            style = TabularMonoStyle.copy(fontSize = 9.sp, fontWeight = FontWeight.SemiBold),
+                            color = CyanInfo,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = "SL ${ChartNumberFormatter.formatPrice(setup.stopLoss, precision)}",
+                            style = TabularMonoStyle.copy(fontSize = 9.sp, fontWeight = FontWeight.SemiBold),
+                            color = BearishRed,
+                            maxLines = 1
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "TP1 ${ChartNumberFormatter.formatPrice(setup.takeProfit1, precision)} (${String.format(java.util.Locale.US, "%.1f", setup.riskReward1)}R)",
+                            style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold),
+                            color = BullishGreen,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = "TP2 ${ChartNumberFormatter.formatPrice(setup.takeProfit2, precision)}",
+                            style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold),
+                            color = Color(0xFF1DE9B6),
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+
         summary.activeBullPower?.let { bull ->
             Text(
                 text = "Bull Pwr: ${ChartNumberFormatter.formatPrice(bull, precision)}",
-                style = TabularMonoStyle.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Medium),
+                style = TabularMonoStyle.copy(fontSize = 9.sp, fontWeight = FontWeight.Medium),
                 color = Color(0xFFFFD600),
                 maxLines = 1,
                 softWrap = false
@@ -793,7 +966,7 @@ fun TbtConditionHudBadge(
         summary.activeBearPower?.let { bear ->
             Text(
                 text = "Bear Pwr: ${ChartNumberFormatter.formatPrice(bear, precision)}",
-                style = TabularMonoStyle.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Medium),
+                style = TabularMonoStyle.copy(fontSize = 9.sp, fontWeight = FontWeight.Medium),
                 color = Color(0xFFFFD600),
                 maxLines = 1,
                 softWrap = false
@@ -803,10 +976,93 @@ fun TbtConditionHudBadge(
             text = summary.lastSignal,
             style = MaterialTheme.typography.bodySmall,
             color = TextPrimary,
-            fontSize = 9.5.sp,
+            fontSize = 9.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
+        )
+
+        if (expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(top = 2.dp)
+                    .testTag("tbt_hud_expanded_details"),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = "${summary.mtfAlignmentLabel} • ${summary.dealingZoneLabel}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AmberGold,
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (setup.direction != TbtTradeDirection.WAIT) {
+                    Text(
+                        text = "SL: ${setup.slReason}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted,
+                        fontSize = 8.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "TP1: ${setup.tp1Reason} | TP2: ${setup.tp2Reason}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted,
+                        fontSize = 8.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                setup.confluenceReasons.forEach { reason ->
+                    Text(
+                        text = "• $reason",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextPrimary.copy(alpha = 0.85f),
+                        fontSize = 8.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (onQuickCreateAlert != null && setup.direction != TbtTradeDirection.WAIT) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        TbtAlertShortcutChip("Alert EN", CyanInfo) { onQuickCreateAlert(setup.entryPrice) }
+                        TbtAlertShortcutChip("Alert SL", BearishRed) { onQuickCreateAlert(setup.stopLoss) }
+                        TbtAlertShortcutChip("Alert TP1", BullishGreen) { onQuickCreateAlert(setup.takeProfit1) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TbtAlertShortcutChip(
+    label: String,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(tint.copy(alpha = 0.15f))
+            .border(0.5.dp, tint.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 5.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = label,
+            style = TabularMonoStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+            color = tint,
+            maxLines = 1
         )
     }
 }
@@ -1177,6 +1433,8 @@ fun FullScreenTimeframeBar(
     onToggleTbtOverlap: () -> Unit = {},
     onToggleTbtSignals: () -> Unit = {},
     onToggleTbtHud: () -> Unit = {},
+    onToggleTbtTradeSetup: () -> Unit = {},
+    onToggleTbtMtf: () -> Unit = {},
     onExitFullScreen: () -> Unit,
     showBackToWatchlist: Boolean = false,
     onBackToWatchlist: () -> Unit = {},
@@ -1282,6 +1540,8 @@ fun FullScreenTimeframeBar(
                     onToggleOverlap = onToggleTbtOverlap,
                     onToggleSignals = onToggleTbtSignals,
                     onToggleHud = onToggleTbtHud,
+                    onToggleTradeSetup = onToggleTbtTradeSetup,
+                    onToggleMtf = onToggleTbtMtf,
                     modifier = Modifier.padding(end = 3.dp)
                 )
             }
@@ -1524,7 +1784,9 @@ fun FullScreenTimeframeBar(
                         onTogglePowerShift = onToggleTbtPowerShift,
                         onToggleOverlap = onToggleTbtOverlap,
                         onToggleSignals = onToggleTbtSignals,
-                        onToggleHud = onToggleTbtHud
+                        onToggleHud = onToggleTbtHud,
+                        onToggleTradeSetup = onToggleTbtTradeSetup,
+                        onToggleMtf = onToggleTbtMtf
                     )
                 }
             }

@@ -27,11 +27,15 @@ import com.example.domain.model.PriceRangeMeasurement
 import com.example.domain.model.PriceSource
 import com.example.domain.model.TickerSnapshot
 import com.example.domain.model.Timeframe
+import com.example.domain.indicator.TbtMtfInput
+import com.example.domain.indicator.TbtMtfTimeframeResolver
 import com.example.domain.indicator.TbtSmcEngine
 import com.example.domain.indicator.TbtSmcOutput
 import com.example.domain.model.WatchlistItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -169,7 +173,18 @@ class ChartViewModel(
     val navigationContextSymbolsState: StateFlow<List<String>> = _navigationContextSymbols.asStateFlow()
     private val _navigationContextLabel = MutableStateFlow("All")
 
+    private data class MtfCandleBundle(
+        val seriesKey: String = "",
+        val ltfLabel: String = "15m",
+        val htfLabel: String = "1H",
+        val htfCandles: List<Candle> = emptyList(),
+        val macroLabel: String = "4H",
+        val macroCandles: List<Candle> = emptyList()
+    )
+
+    private val _mtfBundle = MutableStateFlow(MtfCandleBundle())
     private var klineStreamJob: Job? = null
+    private var mtfFetchJob: Job? = null
     private var replayJob: Job? = null
     private var countdownJob: Job? = null
     private var drawingsJob: Job? = null
@@ -325,8 +340,10 @@ class ChartViewModel(
     private val tbtSmcFlow: Flow<TbtSmcOutput> = combine(
         _candles,
         _replayState,
-        chartStateRepository.preferences
-    ) { candles, replay, prefs ->
+        chartStateRepository.preferences,
+        _mtfBundle,
+        _timeframeId
+    ) { candles, replay, prefs, mtf, tfId ->
         if (!prefs.showTbtSmc) {
             TbtSmcOutput.EMPTY
         } else {
@@ -335,7 +352,23 @@ class ChartViewModel(
             } else {
                 candles
             }
-            TbtSmcEngine.calculate(displayed, prefs.toTbtSmcConfig())
+            val expectedKeyPrefix = "${_symbol.value}_${tfId}_${_priceSource.value.name}"
+            val validMtf = mtf.seriesKey == expectedKeyPrefix
+            val cutoffCloseTime = displayed.lastOrNull()?.closeTime ?: Long.MAX_VALUE
+            val safeHtf = if (validMtf) {
+                if (replay.isActive) mtf.htfCandles.filter { it.closeTime <= cutoffCloseTime } else mtf.htfCandles
+            } else emptyList()
+            val safeMacro = if (validMtf) {
+                if (replay.isActive) mtf.macroCandles.filter { it.closeTime <= cutoffCloseTime } else mtf.macroCandles
+            } else emptyList()
+            val mtfInput = TbtMtfInput(
+                currentTfLabel = if (validMtf) mtf.ltfLabel else tfId,
+                htfLabel = mtf.htfLabel,
+                htfCandles = safeHtf,
+                macroLabel = mtf.macroLabel,
+                macroCandles = safeMacro
+            )
+            TbtSmcEngine.calculate(displayed, prefs.toTbtSmcConfig(), mtfInput)
         }
     }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
@@ -552,8 +585,82 @@ class ChartViewModel(
         }
     }
 
+    private fun launchMtfFetch(
+        symbol: String,
+        pair: String,
+        priceSource: PriceSource,
+        activeTf: Timeframe,
+        allTfs: List<Timeframe>,
+        seriesKey: String
+    ) {
+        mtfFetchJob?.cancel()
+        val mtfPair = TbtMtfTimeframeResolver.resolve(activeTf, allTfs)
+        if (mtfPair == null) {
+            _mtfBundle.value = MtfCandleBundle(seriesKey = seriesKey, ltfLabel = activeTf.label)
+            return
+        }
+        mtfFetchJob = viewModelScope.launch(Dispatchers.IO) {
+            suspend fun loadPairOnce() {
+                coroutineScope {
+                    val htfDeferred = async {
+                        marketRepository.getCachedCandles(symbol, priceSource, mtfPair.htf).takeIf { it.isNotEmpty() }
+                            ?: marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.htf).getOrNull()
+                            ?: emptyList()
+                    }
+                    val macroDeferred = async {
+                        if (mtfPair.macro.id == mtfPair.htf.id) emptyList()
+                        else marketRepository.getCachedCandles(symbol, priceSource, mtfPair.macro).takeIf { it.isNotEmpty() }
+                            ?: marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.macro).getOrNull()
+                            ?: emptyList()
+                    }
+                    val htfList = htfDeferred.await()
+                    val macroList = macroDeferred.await()
+                    _mtfBundle.value = MtfCandleBundle(
+                        seriesKey = seriesKey,
+                        ltfLabel = activeTf.label,
+                        htfLabel = mtfPair.htf.label,
+                        htfCandles = htfList,
+                        macroLabel = mtfPair.macro.label,
+                        macroCandles = macroList
+                    )
+                    // Also fetch fresh REST klines if only cached data was loaded initially
+                    val freshHtf = marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.htf).getOrNull()
+                    val freshMacro = if (mtfPair.macro.id == mtfPair.htf.id) emptyList()
+                    else marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.macro).getOrNull()
+                    if (freshHtf != null || freshMacro != null) {
+                        _mtfBundle.update { prev ->
+                            if (prev.seriesKey != seriesKey) prev
+                            else prev.copy(
+                                htfCandles = freshHtf ?: prev.htfCandles,
+                                macroCandles = freshMacro ?: prev.macroCandles
+                            )
+                        }
+                    }
+                }
+            }
+            loadPairOnce()
+            while (isActive) {
+                delay(60_000L)
+                if (!uiState.value.preferences.let { it.showTbtSmc && it.tbtUseMultiTimeframe }) continue
+                val freshHtf = marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.htf).getOrNull()
+                val freshMacro = if (mtfPair.macro.id == mtfPair.htf.id) null
+                else marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.macro).getOrNull()
+                if (freshHtf != null || freshMacro != null) {
+                    _mtfBundle.update { prev ->
+                        if (prev.seriesKey != seriesKey) prev
+                        else prev.copy(
+                            htfCandles = freshHtf ?: prev.htfCandles,
+                            macroCandles = freshMacro ?: prev.macroCandles
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     fun reloadChartFeed() {
         klineStreamJob?.cancel()
+        mtfFetchJob?.cancel()
         hasReachedEarliestHistory = false
         val sym = _symbol.value
         val source = _priceSource.value
@@ -566,6 +673,16 @@ class ChartViewModel(
             val pair = contract?.pair ?: sym
 
             val seriesKey = currentSeriesKey(sym, tfId, source)
+            val mtfPair = TbtMtfTimeframeResolver.resolve(tf, allTfs)
+            _mtfBundle.value = MtfCandleBundle(
+                seriesKey = seriesKey,
+                ltfLabel = tf.label,
+                htfLabel = mtfPair?.htf?.label ?: tf.label,
+                macroLabel = mtfPair?.macro?.label ?: tf.label
+            )
+            if (uiState.value.preferences.let { it.showTbtSmc && it.tbtUseMultiTimeframe }) {
+                launchMtfFetch(sym, pair, source, tf, allTfs, seriesKey)
+            }
             val cached = marketRepository.getCachedCandles(sym, source, tf)
             val isUninitializedRange = _viewport.value.priceMax <= _viewport.value.priceMin ||
                 (_viewport.value.priceMin == 0.0 && _viewport.value.priceMax == 100.0)
@@ -1339,6 +1456,25 @@ class ChartViewModel(
         updatePreferences { it.copy(tbtShowHud = !it.tbtShowHud) }
     }
 
+    fun toggleTbtTradeSetup() {
+        updatePreferences { it.copy(tbtShowTradeSetup = !it.tbtShowTradeSetup) }
+    }
+
+    fun toggleTbtMultiTimeframe() {
+        val nextEnabled = !uiState.value.preferences.tbtUseMultiTimeframe
+        updatePreferences { it.copy(tbtUseMultiTimeframe = nextEnabled) }
+        if (nextEnabled && _mtfBundle.value.htfCandles.isEmpty()) {
+            viewModelScope.launch {
+                val allTfs = chartStateRepository.timeframes.first()
+                val tf = allTfs.firstOrNull { it.id == _timeframeId.value } ?: Timeframe.DEFAULTS[4]
+                val sym = _symbol.value
+                val pair = marketRepository.getContract(sym)?.pair ?: sym
+                val src = _priceSource.value
+                launchMtfFetch(sym, pair, src, tf, allTfs, currentSeriesKey(sym, tf.id, src))
+            }
+        }
+    }
+
     private fun persistChartState() {
         persistJob?.cancel()
         persistJob = viewModelScope.launch {
@@ -1380,6 +1516,7 @@ class ChartViewModel(
         unsubscribeTickers?.invoke()
         unsubscribeTickers = null
         klineStreamJob?.cancel()
+        mtfFetchJob?.cancel()
         replayJob?.cancel()
         countdownJob?.cancel()
         super.onCleared()

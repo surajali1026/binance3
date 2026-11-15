@@ -1,6 +1,7 @@
 package com.example.domain.indicator
 
 import com.example.domain.model.Candle
+import com.example.domain.model.Timeframe
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -24,8 +25,12 @@ data class TbtZone(
 
 enum class TbtPriceLineCategory {
     ZONE,
+    HTF_ZONE,
     POWER_SHIFT,
-    OVERLAP
+    OVERLAP,
+    TRADE_ENTRY,
+    TRADE_SL,
+    TRADE_TP
 }
 
 data class TbtPriceLine(
@@ -51,11 +56,47 @@ enum class TbtMarketBias(val label: String) {
     SIDEWAYS("SIDEWAYS")
 }
 
+enum class TbtTradeDirection(val label: String) {
+    BUY("BUY"),
+    SELL("SELL"),
+    WAIT("WAIT")
+}
+
+data class TbtTimeframeBiasInfo(
+    val timeframeLabel: String,
+    val role: String, // "LTF", "HTF", "Macro"
+    val bias: TbtMarketBias,
+    val lastSignal: String
+)
+
+data class TbtTradeSetup(
+    val direction: TbtTradeDirection = TbtTradeDirection.WAIT,
+    val isConfirmedEntry: Boolean = false,
+    val confidencePercent: Int = 0,
+    val statusLabel: String = "Wait for setup",
+    val entryPrice: Double = 0.0,
+    val entryZoneLow: Double = 0.0,
+    val entryZoneHigh: Double = 0.0,
+    val stopLoss: Double = 0.0,
+    val takeProfit1: Double = 0.0,
+    val takeProfit2: Double = 0.0,
+    val riskReward1: Double = 0.0,
+    val riskReward2: Double = 0.0,
+    val slReason: String = "",
+    val tp1Reason: String = "",
+    val tp2Reason: String = "",
+    val confluenceReasons: List<String> = emptyList()
+)
+
 data class TbtConditionSummary(
     val bias: TbtMarketBias = TbtMarketBias.SIDEWAYS,
     val activeBullPower: Double? = null,
     val activeBearPower: Double? = null,
-    val lastSignal: String = "Waiting for data..."
+    val lastSignal: String = "Waiting for data...",
+    val mtfBiases: List<TbtTimeframeBiasInfo> = emptyList(),
+    val mtfAlignmentLabel: String = "Single TF",
+    val dealingZoneLabel: String = "Equilibrium",
+    val tradeSetup: TbtTradeSetup = TbtTradeSetup()
 )
 
 data class TbtSmcConfig(
@@ -64,7 +105,17 @@ data class TbtSmcConfig(
     val showPowerShift: Boolean = true,
     val showOverlap: Boolean = true,
     val showSignals: Boolean = true,
-    val showHud: Boolean = true
+    val showHud: Boolean = true,
+    val showTradeSetup: Boolean = true,
+    val useMultiTimeframe: Boolean = true
+)
+
+data class TbtMtfInput(
+    val currentTfLabel: String = "15m",
+    val htfLabel: String = "1H",
+    val htfCandles: List<Candle> = emptyList(),
+    val macroLabel: String = "4H",
+    val macroCandles: List<Candle> = emptyList()
 )
 
 data class TbtSmcOutput(
@@ -75,6 +126,58 @@ data class TbtSmcOutput(
 ) {
     companion object {
         val EMPTY = TbtSmcOutput()
+    }
+}
+
+data class TbtMtfPair(
+    val htf: Timeframe,
+    val macro: Timeframe
+)
+
+object TbtMtfTimeframeResolver {
+    fun resolve(active: Timeframe, available: List<Timeframe> = Timeframe.DEFAULTS): TbtMtfPair? {
+        val pool = if (available.isNotEmpty()) available else Timeframe.DEFAULTS
+        fun findByIdOrDuration(id: String, targetMs: Long): Timeframe {
+            return pool.firstOrNull { it.id.equals(id, ignoreCase = true) }
+                ?: Timeframe.DEFAULTS.firstOrNull { it.id.equals(id, ignoreCase = true) }
+                ?: pool.minByOrNull { abs(it.durationMillis - targetMs) }
+                ?: active
+        }
+
+        val (htf, macro) = when (active.id.lowercase()) {
+            "1m", "3m" -> findByIdOrDuration("15m", 15 * Timeframe.MINUTE_MS) to
+                findByIdOrDuration("1H", Timeframe.HOUR_MS)
+            "5m", "9m" -> findByIdOrDuration("1H", Timeframe.HOUR_MS) to
+                findByIdOrDuration("4H", 4 * Timeframe.HOUR_MS)
+            "15m" -> findByIdOrDuration("1H", Timeframe.HOUR_MS) to
+                findByIdOrDuration("4H", 4 * Timeframe.HOUR_MS)
+            "30m", "45m" -> findByIdOrDuration("4H", 4 * Timeframe.HOUR_MS) to
+                findByIdOrDuration("1D", Timeframe.DAY_MS)
+            "1h", "2h" -> findByIdOrDuration("4H", 4 * Timeframe.HOUR_MS) to
+                findByIdOrDuration("1D", Timeframe.DAY_MS)
+            "4h", "6h", "8h", "12h" -> findByIdOrDuration("1D", Timeframe.DAY_MS) to
+                findByIdOrDuration("1W", Timeframe.WEEK_MS)
+            "1d" -> findByIdOrDuration("1W", Timeframe.WEEK_MS) to
+                findByIdOrDuration("1M", Timeframe.MONTH_MS)
+            "1w", "1mth" -> findByIdOrDuration("1M", Timeframe.MONTH_MS) to
+                findByIdOrDuration("1M", Timeframe.MONTH_MS)
+            else -> {
+                if (active.durationMillis >= Timeframe.MONTH_MS) {
+                    return null
+                }
+                val htfTarget = active.durationMillis * 4L
+                val macroTarget = active.durationMillis * 16L
+                val pickedHtf = pool.filter { it.durationMillis > active.durationMillis * 2L }
+                    .minByOrNull { abs(it.durationMillis - htfTarget) }
+                    ?: findByIdOrDuration("1H", htfTarget)
+                val pickedMacro = pool.filter { it.durationMillis > pickedHtf.durationMillis * 2L }
+                    .minByOrNull { abs(it.durationMillis - macroTarget) }
+                    ?: findByIdOrDuration("4H", macroTarget)
+                pickedHtf to pickedMacro
+            }
+        }
+        if (htf.id == active.id && macro.id == active.id) return null
+        return TbtMtfPair(htf = htf, macro = macro)
     }
 }
 
@@ -103,11 +206,31 @@ private data class OverlappingLevel(
     val type: String
 )
 
+private data class SingleTfAnalysis(
+    val bias: TbtMarketBias,
+    val structureBias: Int, // 1 bull, -1 bear, 0 neutral
+    val markers: List<TbtMarker>,
+    val activeZones: List<TbtZone>,
+    val overlappingLevels: List<OverlappingLevel>,
+    val activeBullPower: Double?,
+    val activeBearPower: Double?,
+    val lastSignal: String,
+    val lastSwingHigh: Double?,
+    val lastSwingLow: Double?,
+    val recentSwingHigh: Double,
+    val recentSwingLow: Double,
+    val atr: Double,
+    val lastBullConfirmIdx: Int,
+    val lastBearConfirmIdx: Int,
+    val candleCount: Int
+)
+
 object TbtSmcEngine {
 
     fun calculate(
         candles: List<Candle>,
-        config: TbtSmcConfig = TbtSmcConfig()
+        config: TbtSmcConfig = TbtSmcConfig(),
+        mtfInput: TbtMtfInput? = null
     ): TbtSmcOutput {
         if (candles.size < 25) {
             return TbtSmcOutput(
@@ -120,8 +243,255 @@ object TbtSmcEngine {
             )
         }
 
+        val ltf = analyzeSingleTf(candles = candles, config = config, emitChartMarkers = true)
+
+        val currentTfLabel = mtfInput?.currentTfLabel ?: "15m"
+        val htfAnalysis = if (config.useMultiTimeframe && mtfInput != null && mtfInput.htfCandles.size >= 25) {
+            analyzeSingleTf(
+                candles = mtfInput.htfCandles,
+                config = config.copy(showZones = true, showOverlap = true, showPowerShift = true),
+                emitChartMarkers = false
+            )
+        } else null
+
+        val macroAnalysis = if (config.useMultiTimeframe && mtfInput != null && mtfInput.macroCandles.size >= 25) {
+            analyzeSingleTf(
+                candles = mtfInput.macroCandles,
+                config = config.copy(showZones = true, showOverlap = false, showPowerShift = true),
+                emitChartMarkers = false
+            )
+        } else null
+
+        // Build MTF bias summary list
+        val mtfBiases = buildList {
+            add(TbtTimeframeBiasInfo(currentTfLabel, "LTF", ltf.bias, ltf.lastSignal))
+            if (mtfInput != null && htfAnalysis != null) {
+                add(TbtTimeframeBiasInfo(mtfInput.htfLabel, "HTF", htfAnalysis.bias, htfAnalysis.lastSignal))
+            }
+            if (mtfInput != null && macroAnalysis != null && mtfInput.macroLabel != mtfInput.htfLabel) {
+                add(TbtTimeframeBiasInfo(mtfInput.macroLabel, "Macro", macroAnalysis.bias, macroAnalysis.lastSignal))
+            }
+        }
+
+        val spot = candles.last().close
+        val dealingMid = (ltf.recentSwingHigh + ltf.recentSwingLow) / 2.0
+        val dealingSpan = (ltf.recentSwingHigh - ltf.recentSwingLow).coerceAtLeast(1e-9)
+        val dealingZoneLabel = when {
+            spot < dealingMid - dealingSpan * 0.08 -> "Discount"
+            spot > dealingMid + dealingSpan * 0.08 -> "Premium"
+            else -> "Equilibrium"
+        }
+
+        val mtfAlignmentLabel = computeMtfAlignmentLabel(
+            ltfBias = ltf.bias,
+            htfBias = htfAnalysis?.bias,
+            macroBias = macroAnalysis?.bias,
+            hasMtf = htfAnalysis != null || macroAnalysis != null
+        )
+
+        val tradeSetup = buildTradeSetup(
+            candles = candles,
+            ltf = ltf,
+            htfLabel = mtfInput?.htfLabel ?: "HTF",
+            htf = htfAnalysis,
+            macroLabel = mtfInput?.macroLabel ?: "Macro",
+            macro = macroAnalysis,
+            dealingZoneLabel = dealingZoneLabel
+        )
+
+        // Assemble PriceLines
+        val priceLines = mutableListOf<TbtPriceLine>()
+        val recentLtfZones = ltf.activeZones
+            .filter { it.type == TbtZoneType.DEMAND || it.type == TbtZoneType.SUPPLY }
+            .takeLast(4)
+
+        if (config.showZones) {
+            for (z in recentLtfZones) {
+                if (z.type == TbtZoneType.DEMAND) {
+                    priceLines.add(
+                        TbtPriceLine(
+                            price = z.top,
+                            title = z.label,
+                            colorHex = if (z.tapped) "rgba(0, 200, 83, 0.45)" else "#00c853",
+                            lineStyle = if (z.tapped) 2 else 0,
+                            lineWidth = 1,
+                            category = TbtPriceLineCategory.ZONE
+                        )
+                    )
+                } else if (z.type == TbtZoneType.SUPPLY) {
+                    priceLines.add(
+                        TbtPriceLine(
+                            price = z.bottom,
+                            title = z.label,
+                            colorHex = if (z.tapped) "rgba(255, 23, 68, 0.45)" else "#ff1744",
+                            lineStyle = if (z.tapped) 2 else 0,
+                            lineWidth = 1,
+                            category = TbtPriceLineCategory.ZONE
+                        )
+                    )
+                }
+            }
+
+            // Nearest HTF Key Demand & Supply zones plotted directly on active chart
+            if (config.useMultiTimeframe && htfAnalysis != null) {
+                val htfLabel = mtfInput?.htfLabel ?: "HTF"
+                htfAnalysis.activeZones
+                    .filter { it.type == TbtZoneType.DEMAND && it.top <= spot * 1.03 }
+                    .maxByOrNull { it.top }
+                    ?.let { z ->
+                        priceLines.add(
+                            TbtPriceLine(
+                                price = z.top,
+                                title = "$htfLabel Demand",
+                                colorHex = "#00bfa5",
+                                lineStyle = 2,
+                                lineWidth = 1,
+                                category = TbtPriceLineCategory.HTF_ZONE
+                            )
+                        )
+                    }
+                htfAnalysis.activeZones
+                    .filter { it.type == TbtZoneType.SUPPLY && it.bottom >= spot * 0.97 }
+                    .minByOrNull { it.bottom }
+                    ?.let { z ->
+                        priceLines.add(
+                            TbtPriceLine(
+                                price = z.bottom,
+                                title = "$htfLabel Supply",
+                                colorHex = "#ff6d00",
+                                lineStyle = 2,
+                                lineWidth = 1,
+                                category = TbtPriceLineCategory.HTF_ZONE
+                            )
+                        )
+                    }
+            }
+        }
+
+        if (config.showPowerShift) {
+            ltf.activeBullPower?.let { price ->
+                priceLines.add(
+                    TbtPriceLine(
+                        price = price,
+                        title = "⚡ Buyer Power Shift",
+                        colorHex = "#ffd600",
+                        lineStyle = 2,
+                        lineWidth = 2,
+                        category = TbtPriceLineCategory.POWER_SHIFT
+                    )
+                )
+            }
+            ltf.activeBearPower?.let { price ->
+                priceLines.add(
+                    TbtPriceLine(
+                        price = price,
+                        title = "⚡ Seller Power Shift",
+                        colorHex = "#ffd600",
+                        lineStyle = 2,
+                        lineWidth = 2,
+                        category = TbtPriceLineCategory.POWER_SHIFT
+                    )
+                )
+            }
+        }
+
+        if (config.showOverlap) {
+            for (ov in ltf.overlappingLevels) {
+                priceLines.add(
+                    TbtPriceLine(
+                        price = ov.price,
+                        title = "Overlapping (${ov.type} POI)",
+                        colorHex = "#aa00ff",
+                        lineStyle = 1,
+                        lineWidth = 1,
+                        category = TbtPriceLineCategory.OVERLAP
+                    )
+                )
+            }
+        }
+
+        if (config.showTradeSetup && tradeSetup.direction != TbtTradeDirection.WAIT) {
+            val isBuy = tradeSetup.direction == TbtTradeDirection.BUY
+            priceLines.add(
+                TbtPriceLine(
+                    price = tradeSetup.entryPrice,
+                    title = if (isBuy) "BUY ENTRY" else "SELL ENTRY",
+                    colorHex = "#00e5ff",
+                    lineStyle = 0,
+                    lineWidth = 2,
+                    category = TbtPriceLineCategory.TRADE_ENTRY
+                )
+            )
+            priceLines.add(
+                TbtPriceLine(
+                    price = tradeSetup.stopLoss,
+                    title = "SL",
+                    colorHex = "#ff1744",
+                    lineStyle = 2,
+                    lineWidth = 2,
+                    category = TbtPriceLineCategory.TRADE_SL
+                )
+            )
+            priceLines.add(
+                TbtPriceLine(
+                    price = tradeSetup.takeProfit1,
+                    title = "TP1 (1:${formatRr(tradeSetup.riskReward1)})",
+                    colorHex = "#00e676",
+                    lineStyle = 2,
+                    lineWidth = 2,
+                    category = TbtPriceLineCategory.TRADE_TP
+                )
+            )
+            priceLines.add(
+                TbtPriceLine(
+                    price = tradeSetup.takeProfit2,
+                    title = "TP2 (1:${formatRr(tradeSetup.riskReward2)})",
+                    colorHex = "#1de9b6",
+                    lineStyle = 1,
+                    lineWidth = 1,
+                    category = TbtPriceLineCategory.TRADE_TP
+                )
+            )
+        }
+
+        // Combined overall bias: respects LTF and MTF consensus
+        val overallBias = when {
+            htfAnalysis != null && htfAnalysis.bias == ltf.bias -> ltf.bias
+            htfAnalysis != null && macroAnalysis != null && htfAnalysis.bias == macroAnalysis.bias && htfAnalysis.bias != TbtMarketBias.SIDEWAYS -> htfAnalysis.bias
+            else -> ltf.bias
+        }
+
+        // Zones exposed for translucent shading on chart (recent LTF Demand/Supply + FVG + HTF POI)
+        val exposedZones = buildList {
+            addAll(recentLtfZones)
+            addAll(ltf.activeZones.filter { it.type == TbtZoneType.FVG_BULL || it.type == TbtZoneType.FVG_BEAR }.takeLast(3))
+        }
+
+        return TbtSmcOutput(
+            markers = ltf.markers,
+            priceLines = priceLines,
+            zones = exposedZones,
+            summary = TbtConditionSummary(
+                bias = overallBias,
+                activeBullPower = ltf.activeBullPower,
+                activeBearPower = ltf.activeBearPower,
+                lastSignal = ltf.lastSignal,
+                mtfBiases = mtfBiases,
+                mtfAlignmentLabel = mtfAlignmentLabel,
+                dealingZoneLabel = dealingZoneLabel,
+                tradeSetup = tradeSetup
+            )
+        )
+    }
+
+    private fun analyzeSingleTf(
+        candles: List<Candle>,
+        config: TbtSmcConfig,
+        emitChartMarkers: Boolean
+    ): SingleTfAnalysis {
         val sLen = config.swingLen.coerceAtLeast(2)
-        val markerMap = LinkedHashMap<Long, Pair<Int, TbtMarker>>()
+        // Key by (timeMillis, position) so an aboveBar and belowBar marker on the same bar don't erase each other
+        val markerMap = LinkedHashMap<Pair<Long, String>, Pair<Int, TbtMarker>>()
 
         fun addMarker(
             timeMillis: Long,
@@ -131,9 +501,11 @@ object TbtSmcEngine {
             text: String,
             priority: Int
         ) {
-            val existing = markerMap[timeMillis]
+            if (!emitChartMarkers) return
+            val key = timeMillis to position
+            val existing = markerMap[key]
             if (existing == null || existing.first <= priority) {
-                markerMap[timeMillis] = priority to TbtMarker(
+                markerMap[key] = priority to TbtMarker(
                     timeMillis = timeMillis,
                     position = position,
                     colorHex = colorHex,
@@ -170,12 +542,19 @@ object TbtSmcEngine {
 
         var lastSwingHigh: Double? = null
         var lastSwingLow: Double? = null
+        var lastBrokenHighPrice: Double? = null
+        var lastBrokenLowPrice: Double? = null
+        var structureBias = 0 // 1 bullish, -1 bearish
 
         val activeZones = mutableListOf<MutableTbtZone>()
         val overlappingLevels = mutableListOf<OverlappingLevel>()
         var activeBullPower: Double? = null
         var activeBearPower: Double? = null
         var lastSignal = "Neutral"
+        var lastBullConfirmIdx = -999
+        var lastBearConfirmIdx = -999
+        var lastBuySetupIdx = -999
+        var lastSellSetupIdx = -999
 
         for (i in 15 until candles.size) {
             val c = candles[i]
@@ -209,17 +588,53 @@ object TbtSmcEngine {
                 if (isSL) lastSwingLow = pLow
             }
 
-            // 2. Overlapping Level (S/R Flip)
-            if (config.showOverlap) {
-                val sh = lastSwingHigh
-                if (sh != null && c1.close <= sh && c.close > sh) {
+            // 2. BOS / CHoCH + Overlapping Level (S/R Flip POI)
+            val sh = lastSwingHigh
+            if (sh != null && c.close > sh && lastBrokenHighPrice != sh) {
+                val isChoch = structureBias == -1
+                lastBrokenHighPrice = sh
+                structureBias = 1
+                if (config.showOverlap) {
                     overlappingLevels.add(OverlappingLevel(price = sh, type = "BUY"))
                     while (overlappingLevels.size > 2) overlappingLevels.removeAt(0)
                 }
-                val sl = lastSwingLow
-                if (sl != null && c1.close >= sl && c.close < sl) {
+                if (config.showSignals) {
+                    addMarker(
+                        timeMillis = c.openTime,
+                        position = "belowBar",
+                        colorHex = if (isChoch) "#00e676" else "#00c853",
+                        shape = "arrowUp",
+                        text = if (isChoch) "CHoCH" else "BOS",
+                        priority = if (isChoch) 2 else 1
+                    )
+                }
+                if (isChoch) {
+                    lastSignal = "Bullish CHoCH"
+                    lastBullConfirmIdx = i
+                }
+            }
+            val sl = lastSwingLow
+            if (sl != null && c.close < sl && lastBrokenLowPrice != sl) {
+                val isChoch = structureBias == 1
+                lastBrokenLowPrice = sl
+                structureBias = -1
+                if (config.showOverlap) {
                     overlappingLevels.add(OverlappingLevel(price = sl, type = "SELL"))
                     while (overlappingLevels.size > 2) overlappingLevels.removeAt(0)
+                }
+                if (config.showSignals) {
+                    addMarker(
+                        timeMillis = c.openTime,
+                        position = "aboveBar",
+                        colorHex = if (isChoch) "#ff5252" else "#ff1744",
+                        shape = "arrowDown",
+                        text = if (isChoch) "CHoCH" else "BOS",
+                        priority = if (isChoch) 2 else 1
+                    )
+                }
+                if (isChoch) {
+                    lastSignal = "Bearish CHoCH"
+                    lastBearConfirmIdx = i
                 }
             }
 
@@ -257,6 +672,8 @@ object TbtSmcEngine {
             }
 
             // 4. Manage Active Zones & Power Shift
+            var tappedDemandThisBar = false
+            var tappedSupplyThisBar = false
             for (j in activeZones.indices.reversed()) {
                 val z = activeZones[j]
                 if (z.type == TbtZoneType.DEMAND) {
@@ -266,6 +683,9 @@ object TbtSmcEngine {
                         z.tapped = true
                         z.label = "${z.label} (Tapped)"
                         activeBullPower = c.low
+                        tappedDemandThisBar = true
+                    } else if (z.tapped && c.low <= z.top && c.close > z.bottom) {
+                        tappedDemandThisBar = true
                     }
                 } else if (z.type == TbtZoneType.SUPPLY) {
                     if (c.close > z.top) {
@@ -274,6 +694,9 @@ object TbtSmcEngine {
                         z.tapped = true
                         z.label = "${z.label} (Tapped)"
                         activeBearPower = c.high
+                        tappedSupplyThisBar = true
+                    } else if (z.tapped && c.high >= z.bottom && c.close < z.top) {
+                        tappedSupplyThisBar = true
                     }
                 }
             }
@@ -291,6 +714,7 @@ object TbtSmcEngine {
                     )
                 }
                 lastSignal = "Buyer Power Broken (Bearish)"
+                lastBearConfirmIdx = i
                 activeBullPower = null
             }
 
@@ -307,6 +731,7 @@ object TbtSmcEngine {
                     )
                 }
                 lastSignal = "Seller Power Broken (Bullish)"
+                lastBullConfirmIdx = i
                 activeBearPower = null
             }
 
@@ -399,6 +824,7 @@ object TbtSmcEngine {
                     )
                 }
                 lastSignal = "Bullish Liquidity Grab"
+                lastBullConfirmIdx = i
             }
             if (bearSweep) {
                 if (config.showSignals) {
@@ -412,6 +838,7 @@ object TbtSmcEngine {
                     )
                 }
                 lastSignal = "Bearish Liquidity Grab"
+                lastBearConfirmIdx = i
             }
 
             // 7. TBT 3-Candle Reversal
@@ -430,6 +857,7 @@ object TbtSmcEngine {
                     )
                 }
                 lastSignal = "3CR BUY Confirmed"
+                lastBullConfirmIdx = i
             }
             if (bear3cr) {
                 if (config.showSignals) {
@@ -443,107 +871,424 @@ object TbtSmcEngine {
                     )
                 }
                 lastSignal = "3CR SELL Confirmed"
+                lastBearConfirmIdx = i
             }
-        }
 
-        // Convert active Demand & Supply zones (last 4) to horizontal PriceLines
-        val priceLines = mutableListOf<TbtPriceLine>()
-        val recentZones = activeZones
-            .filter { it.type == TbtZoneType.DEMAND || it.type == TbtZoneType.SUPPLY }
-            .takeLast(4)
-
-        if (config.showZones) {
-            for (z in recentZones) {
-                if (z.type == TbtZoneType.DEMAND) {
-                    priceLines.add(
-                        TbtPriceLine(
-                            price = z.top,
-                            title = z.label,
-                            colorHex = if (z.tapped) "rgba(0, 200, 83, 0.45)" else "#00c853",
-                            lineStyle = if (z.tapped) 2 else 0,
-                            lineWidth = 1,
-                            category = TbtPriceLineCategory.ZONE
-                        )
-                    )
-                } else if (z.type == TbtZoneType.SUPPLY) {
-                    priceLines.add(
-                        TbtPriceLine(
-                            price = z.bottom,
-                            title = z.label,
-                            colorHex = if (z.tapped) "rgba(255, 23, 68, 0.45)" else "#ff1744",
-                            lineStyle = if (z.tapped) 2 else 0,
-                            lineWidth = 1,
-                            category = TbtPriceLineCategory.ZONE
-                        )
-                    )
-                }
+            // 8. High-Confluence BUY / SELL POI Signal Markers (without overriding 3CR BUY/SELL on same bar)
+            val nearDemand = tappedDemandThisBar || activeZones.any {
+                it.type == TbtZoneType.DEMAND && c.low <= it.top + atr * 0.35 && c.close >= it.bottom
             }
-        }
-
-        if (config.showPowerShift) {
-            activeBullPower?.let { price ->
-                priceLines.add(
-                    TbtPriceLine(
-                        price = price,
-                        title = "⚡ Buyer Power Shift",
-                        colorHex = "#ffd600",
-                        lineStyle = 2,
-                        lineWidth = 2,
-                        category = TbtPriceLineCategory.POWER_SHIFT
-                    )
+            val nearSupply = tappedSupplyThisBar || activeZones.any {
+                it.type == TbtZoneType.SUPPLY && c.high >= it.bottom - atr * 0.35 && c.close <= it.top
+            }
+            if (config.showTradeSetup && config.showSignals && i - lastBuySetupIdx >= 5 &&
+                !bull3cr && nearDemand && (bullSweep || structureBias == 1 && isBull && bodySizes[i] > avgBody * 1.1)
+            ) {
+                lastBuySetupIdx = i
+                addMarker(
+                    timeMillis = c.openTime,
+                    position = "belowBar",
+                    colorHex = "#00e676",
+                    shape = "arrowUp",
+                    text = "BUY",
+                    priority = 4
                 )
+                lastSignal = "BUY @ Demand POI"
+                lastBullConfirmIdx = i
             }
-            activeBearPower?.let { price ->
-                priceLines.add(
-                    TbtPriceLine(
-                        price = price,
-                        title = "⚡ Seller Power Shift",
-                        colorHex = "#ffd600",
-                        lineStyle = 2,
-                        lineWidth = 2,
-                        category = TbtPriceLineCategory.POWER_SHIFT
-                    )
+            if (config.showTradeSetup && config.showSignals && i - lastSellSetupIdx >= 5 &&
+                !bear3cr && nearSupply && (bearSweep || structureBias == -1 && isBear && bodySizes[i] > avgBody * 1.1)
+            ) {
+                lastSellSetupIdx = i
+                addMarker(
+                    timeMillis = c.openTime,
+                    position = "aboveBar",
+                    colorHex = "#ff1744",
+                    shape = "arrowDown",
+                    text = "SELL",
+                    priority = 4
                 )
-            }
-        }
-
-        if (config.showOverlap) {
-            for (ov in overlappingLevels) {
-                priceLines.add(
-                    TbtPriceLine(
-                        price = ov.price,
-                        title = "Overlapping (${ov.type} POI)",
-                        colorHex = "#aa00ff",
-                        lineStyle = 1,
-                        lineWidth = 1,
-                        category = TbtPriceLineCategory.OVERLAP
-                    )
-                )
+                lastSignal = "SELL @ Supply POI"
+                lastBearConfirmIdx = i
             }
         }
 
         val lastCandle = candles.last()
         val ema20 = candles.takeLast(20).map { it.close }.average()
+        val lastAtr = getSma(trueRanges, candles.lastIndex, 14)
+            .takeIf { it.isFinite() && it > 0.0 }
+            ?: (lastCandle.high - lastCandle.low).coerceAtLeast(lastCandle.close * 0.002)
+
         val bias = when {
-            lastCandle.close > ema20 * 1.001 -> TbtMarketBias.BULLISH
-            lastCandle.close < ema20 * 0.999 -> TbtMarketBias.BEARISH
+            lastCandle.close > ema20 * 1.001 && structureBias >= 0 -> TbtMarketBias.BULLISH
+            lastCandle.close < ema20 * 0.999 && structureBias <= 0 -> TbtMarketBias.BEARISH
+            structureBias > 0 && lastCandle.close >= ema20 * 0.998 -> TbtMarketBias.BULLISH
+            structureBias < 0 && lastCandle.close <= ema20 * 1.002 -> TbtMarketBias.BEARISH
+            lastCandle.close > ema20 * 1.002 -> TbtMarketBias.BULLISH
+            lastCandle.close < ema20 * 0.998 -> TbtMarketBias.BEARISH
             else -> TbtMarketBias.SIDEWAYS
         }
+
+        val lookback = candles.takeLast(45)
+        val recentHigh = lookback.maxOf { it.high }
+        val recentLow = lookback.minOf { it.low }
 
         val markers = markerMap.values
             .map { it.second }
             .sortedBy { it.timeMillis }
 
-        return TbtSmcOutput(
+        return SingleTfAnalysis(
+            bias = bias,
+            structureBias = structureBias,
             markers = markers,
-            priceLines = priceLines,
-            zones = activeZones.map { it.toImmutable() },
-            summary = TbtConditionSummary(
-                bias = bias,
-                activeBullPower = activeBullPower,
-                activeBearPower = activeBearPower,
-                lastSignal = lastSignal
-            )
+            activeZones = activeZones.map { it.toImmutable() },
+            overlappingLevels = overlappingLevels.toList(),
+            activeBullPower = activeBullPower,
+            activeBearPower = activeBearPower,
+            lastSignal = lastSignal,
+            lastSwingHigh = lastSwingHigh,
+            lastSwingLow = lastSwingLow,
+            recentSwingHigh = recentHigh,
+            recentSwingLow = recentLow,
+            atr = lastAtr,
+            lastBullConfirmIdx = lastBullConfirmIdx,
+            lastBearConfirmIdx = lastBearConfirmIdx,
+            candleCount = candles.size
         )
+    }
+
+    private fun computeMtfAlignmentLabel(
+        ltfBias: TbtMarketBias,
+        htfBias: TbtMarketBias?,
+        macroBias: TbtMarketBias?,
+        hasMtf: Boolean
+    ): String {
+        if (!hasMtf) return "Single TF"
+        val biases = listOfNotNull(ltfBias, htfBias, macroBias)
+        val bulls = biases.count { it == TbtMarketBias.BULLISH }
+        val bears = biases.count { it == TbtMarketBias.BEARISH }
+        return when {
+            bulls == biases.size -> "Full Bullish MTF (${bulls}/${biases.size})"
+            bears == biases.size -> "Full Bearish MTF (${bears}/${biases.size})"
+            htfBias == TbtMarketBias.BULLISH && macroBias == TbtMarketBias.BULLISH -> "Bullish HTF Pullback"
+            htfBias == TbtMarketBias.BEARISH && macroBias == TbtMarketBias.BEARISH -> "Bearish HTF Pullback"
+            bulls > bears -> "Bullish Lean ($bulls/${biases.size})"
+            bears > bulls -> "Bearish Lean ($bears/${biases.size})"
+            else -> "Mixed MTF Range"
+        }
+    }
+
+    private fun buildTradeSetup(
+        candles: List<Candle>,
+        ltf: SingleTfAnalysis,
+        htfLabel: String,
+        htf: SingleTfAnalysis?,
+        macroLabel: String,
+        macro: SingleTfAnalysis?,
+        dealingZoneLabel: String
+    ): TbtTradeSetup {
+        val spot = candles.last().close
+        if (!spot.isFinite() || spot <= 0.0) return TbtTradeSetup()
+        val atr = ltf.atr.coerceAtLeast(spot * 0.0015)
+
+        val ltfDemandBelow = ltf.activeZones
+            .filter { it.type == TbtZoneType.DEMAND && it.bottom <= spot }
+            .maxByOrNull { it.top }
+        val ltfSupplyAbove = ltf.activeZones
+            .filter { it.type == TbtZoneType.SUPPLY && it.top >= spot }
+            .minByOrNull { it.bottom }
+
+        val htfDemandBelow = htf?.activeZones
+            ?.filter { it.type == TbtZoneType.DEMAND && it.bottom <= spot }
+            ?.maxByOrNull { it.top }
+        val htfSupplyAbove = htf?.activeZones
+            ?.filter { it.type == TbtZoneType.SUPPLY && it.top >= spot }
+            ?.minByOrNull { it.bottom }
+
+        val inLtfDemand = ltfDemandBelow != null && spot <= ltfDemandBelow.top + atr * 0.65 && spot >= ltfDemandBelow.bottom
+        val inHtfDemand = htfDemandBelow != null && spot <= htfDemandBelow.top + atr * 1.1 && spot >= htfDemandBelow.bottom
+        val inLtfSupply = ltfSupplyAbove != null && spot >= ltfSupplyAbove.bottom - atr * 0.65 && spot <= ltfSupplyAbove.top
+        val inHtfSupply = htfSupplyAbove != null && spot >= htfSupplyAbove.bottom - atr * 1.1 && spot <= htfSupplyAbove.top
+
+        val recentBullConfirm = (ltf.candleCount - 1) - ltf.lastBullConfirmIdx <= 4
+        val recentBearConfirm = (ltf.candleCount - 1) - ltf.lastBearConfirmIdx <= 4
+
+        var bullScore = 0
+        var bearScore = 0
+        val bullReasons = mutableListOf<String>()
+        val bearReasons = mutableListOf<String>()
+
+        if (macro != null) {
+            if (macro.bias == TbtMarketBias.BULLISH) {
+                bullScore += 25
+                bullReasons.add("$macroLabel Macro Bullish")
+            } else if (macro.bias == TbtMarketBias.BEARISH) {
+                bearScore += 25
+                bearReasons.add("$macroLabel Macro Bearish")
+            }
+        }
+        if (htf != null) {
+            if (htf.bias == TbtMarketBias.BULLISH) {
+                bullScore += 30
+                bullReasons.add("$htfLabel HTF Bullish")
+            } else if (htf.bias == TbtMarketBias.BEARISH) {
+                bearScore += 30
+                bearReasons.add("$htfLabel HTF Bearish")
+            }
+        }
+        if (ltf.bias == TbtMarketBias.BULLISH) {
+            bullScore += 20
+            bullReasons.add("LTF Structure Bullish")
+        } else if (ltf.bias == TbtMarketBias.BEARISH) {
+            bearScore += 20
+            bearReasons.add("LTF Structure Bearish")
+        }
+
+        if (inLtfDemand) {
+            bullScore += 15
+            bullReasons.add("Inside LTF Demand POI")
+        }
+        if (inHtfDemand) {
+            bullScore += 15
+            bullReasons.add("Inside $htfLabel HTF Demand")
+        }
+        if (inLtfSupply) {
+            bearScore += 15
+            bearReasons.add("Inside LTF Supply POI")
+        }
+        if (inHtfSupply) {
+            bearScore += 15
+            bearReasons.add("Inside $htfLabel HTF Supply")
+        }
+
+        if (dealingZoneLabel == "Discount") {
+            bullScore += 10
+            bullReasons.add("Discount Pricing (<50%)")
+        } else if (dealingZoneLabel == "Premium") {
+            bearScore += 10
+            bearReasons.add("Premium Pricing (>50%)")
+        }
+
+        if (recentBullConfirm) {
+            bullScore += 18
+            bullReasons.add(ltf.lastSignal)
+        }
+        if (recentBearConfirm) {
+            bearScore += 18
+            bearReasons.add(ltf.lastSignal)
+        }
+        if (ltf.activeBullPower != null) {
+            bullScore += 8
+            bullReasons.add("Buyer Power Active")
+        }
+        if (ltf.activeBearPower != null) {
+            bearScore += 8
+            bearReasons.add("Seller Power Active")
+        }
+
+        val scoreDiff = abs(bullScore - bearScore)
+        val hasStructuralPoi = ltfDemandBelow != null || htfDemandBelow != null || ltf.activeBullPower != null ||
+            ltfSupplyAbove != null || htfSupplyAbove != null || ltf.activeBearPower != null
+
+        if (!hasStructuralPoi || (max(bullScore, bearScore) < 35) ||
+            (scoreDiff < 15 && !recentBullConfirm && !recentBearConfirm)
+        ) {
+            return TbtTradeSetup(
+                direction = TbtTradeDirection.WAIT,
+                isConfirmedEntry = false,
+                confidencePercent = max(bullScore, bearScore).coerceIn(15, 55),
+                statusLabel = "Wait • Mixed MTF / Mid-Range",
+                confluenceReasons = listOf("Wait for clean Demand/Supply tap or MTF alignment")
+            )
+        }
+
+        val isBuy = bullScore >= bearScore
+        val rawConf = if (isBuy) bullScore else bearScore
+        val confidence = rawConf.coerceIn(45, 96)
+        val minRisk = max(atr * 0.45, spot * 0.002)
+        val slBuffer = max(atr * 0.25, spot * 0.0012)
+
+        return if (isBuy) {
+            val activeZone = when {
+                inHtfDemand && inLtfDemand -> ltfDemandBelow
+                inLtfDemand -> ltfDemandBelow
+                inHtfDemand -> htfDemandBelow
+                else -> ltfDemandBelow ?: htfDemandBelow
+            }
+            val confirmed = recentBullConfirm || (inLtfDemand && ltf.activeBullPower != null) || (inHtfDemand && recentBullConfirm)
+            val entry = if (confirmed) {
+                spot
+            } else {
+                activeZone?.top ?: ltf.activeBullPower ?: ltf.lastSwingLow ?: (spot - atr * 0.6)
+            }.coerceAtMost(spot * 1.005)
+
+            val rawFloor = minOf(
+                activeZone?.bottom ?: entry,
+                ltf.activeBullPower ?: Double.MAX_VALUE,
+                if (activeZone == null && ltf.lastSwingLow != null && ltf.lastSwingLow < entry) ltf.lastSwingLow else Double.MAX_VALUE
+            )
+            val structuralSl = (if (rawFloor.isFinite() && rawFloor < entry) rawFloor else entry - atr * 1.1) - slBuffer
+            val sl = min(structuralSl, entry - minRisk).coerceAtLeast(spot * 0.25)
+            val risk = (entry - sl).coerceAtLeast(minRisk)
+
+            val slReason = when {
+                ltf.activeBullPower != null && rawFloor == ltf.activeBullPower -> "Below Buyer Power + Buf"
+                activeZone != null -> "Below ${activeZone.label}"
+                else -> "Below Swing Low + ATR"
+            }
+
+            // TP1: nearest opposing LTF Supply bottom or LTF swing high >= 1.6R
+            val ltfSupplyTarget = ltf.activeZones
+                .filter { it.type == TbtZoneType.SUPPLY && it.bottom >= entry + risk * 1.5 }
+                .minByOrNull { it.bottom }
+            val candidateTp1 = listOfNotNull(
+                ltfSupplyTarget?.bottom,
+                ltf.lastSwingHigh?.takeIf { it >= entry + risk * 1.5 },
+                htf?.lastSwingHigh?.takeIf { it >= entry + risk * 1.6 }
+            ).minOrNull()
+            val tp1 = (candidateTp1 ?: (entry + risk * 2.0)).coerceIn(entry + risk * 1.6, entry + risk * 4.5)
+            val tp1Reason = when {
+                ltfSupplyTarget != null && candidateTp1 == ltfSupplyTarget.bottom -> "LTF Supply POI"
+                ltf.lastSwingHigh != null && candidateTp1 == ltf.lastSwingHigh -> "LTF Swing High Liq"
+                else -> "Fixed 1:2.0R Target"
+            }
+
+            // TP2: opposing HTF Supply or HTF/Macro Swing High beyond TP1
+            val htfSupplyTarget = htf?.activeZones
+                ?.filter { it.type == TbtZoneType.SUPPLY && it.bottom >= tp1 + risk * 0.5 }
+                ?.minByOrNull { it.bottom }
+            val macroSupplyTarget = macro?.activeZones
+                ?.filter { it.type == TbtZoneType.SUPPLY && it.bottom >= tp1 + risk * 0.5 }
+                ?.minByOrNull { it.bottom }
+            val candidateTp2 = listOfNotNull(
+                htfSupplyTarget?.bottom,
+                htf?.lastSwingHigh?.takeIf { it >= tp1 + risk * 0.5 },
+                macroSupplyTarget?.bottom,
+                macro?.lastSwingHigh?.takeIf { it >= tp1 + risk * 0.5 },
+                ltf.recentSwingHigh.takeIf { it >= tp1 + risk * 0.5 }
+            ).minOrNull()
+            val tp2 = (candidateTp2 ?: max(tp1 + risk * 1.4, entry + risk * 3.5))
+                .coerceAtLeast(tp1 + risk * 0.8)
+            val tp2Reason = when {
+                htfSupplyTarget != null && candidateTp2 == htfSupplyTarget.bottom -> "$htfLabel HTF Supply"
+                htf?.lastSwingHigh != null && candidateTp2 == htf.lastSwingHigh -> "$htfLabel External High"
+                macroSupplyTarget != null && candidateTp2 == macroSupplyTarget.bottom -> "$macroLabel Macro Supply"
+                macro?.lastSwingHigh != null && candidateTp2 == macro.lastSwingHigh -> "$macroLabel External High"
+                else -> "MTF Extension Target"
+            }
+
+            TbtTradeSetup(
+                direction = TbtTradeDirection.BUY,
+                isConfirmedEntry = confirmed,
+                confidencePercent = confidence,
+                statusLabel = if (confirmed) "BUY NOW • MTF Confirmed" else "BUY LIMIT @ Demand",
+                entryPrice = entry,
+                entryZoneLow = activeZone?.bottom ?: sl,
+                entryZoneHigh = activeZone?.top ?: entry,
+                stopLoss = sl,
+                takeProfit1 = tp1,
+                takeProfit2 = tp2,
+                riskReward1 = ((tp1 - entry) / risk).coerceAtLeast(0.1),
+                riskReward2 = ((tp2 - entry) / risk).coerceAtLeast(0.1),
+                slReason = slReason,
+                tp1Reason = tp1Reason,
+                tp2Reason = tp2Reason,
+                confluenceReasons = bullReasons.distinct().take(4)
+            )
+        } else {
+            val activeZone = when {
+                inHtfSupply && inLtfSupply -> ltfSupplyAbove
+                inLtfSupply -> ltfSupplyAbove
+                inHtfSupply -> htfSupplyAbove
+                else -> ltfSupplyAbove ?: htfSupplyAbove
+            }
+            val confirmed = recentBearConfirm || (inLtfSupply && ltf.activeBearPower != null) || (inHtfSupply && recentBearConfirm)
+            val entry = if (confirmed) {
+                spot
+            } else {
+                activeZone?.bottom ?: ltf.activeBearPower ?: ltf.lastSwingHigh ?: (spot + atr * 0.6)
+            }.coerceAtLeast(spot * 0.995)
+
+            val rawCeil = maxOf(
+                activeZone?.top ?: entry,
+                ltf.activeBearPower ?: Double.MIN_VALUE,
+                if (activeZone == null && ltf.lastSwingHigh != null && ltf.lastSwingHigh > entry) ltf.lastSwingHigh else Double.MIN_VALUE
+            )
+            val structuralSl = (if (rawCeil.isFinite() && rawCeil > entry) rawCeil else entry + atr * 1.1) + slBuffer
+            val sl = max(structuralSl, entry + minRisk)
+            val risk = (sl - entry).coerceAtLeast(minRisk)
+
+            val slReason = when {
+                ltf.activeBearPower != null && rawCeil == ltf.activeBearPower -> "Above Seller Power + Buf"
+                activeZone != null -> "Above ${activeZone.label}"
+                else -> "Above Swing High + ATR"
+            }
+
+            // TP1: nearest opposing LTF Demand top or LTF Swing Low
+            val ltfDemandTarget = ltf.activeZones
+                .filter { it.type == TbtZoneType.DEMAND && it.top <= entry - risk * 1.5 }
+                .maxByOrNull { it.top }
+            val candidateTp1 = listOfNotNull(
+                ltfDemandTarget?.top,
+                ltf.lastSwingLow?.takeIf { it <= entry - risk * 1.5 && it > 0.0 },
+                htf?.lastSwingLow?.takeIf { it <= entry - risk * 1.6 && it > 0.0 }
+            ).maxOrNull()
+            val tp1 = (candidateTp1 ?: (entry - risk * 2.0))
+                .coerceIn((entry - risk * 4.5).coerceAtLeast(spot * 0.1), entry - risk * 1.6)
+            val tp1Reason = when {
+                ltfDemandTarget != null && candidateTp1 == ltfDemandTarget.top -> "LTF Demand POI"
+                ltf.lastSwingLow != null && candidateTp1 == ltf.lastSwingLow -> "LTF Swing Low Liq"
+                else -> "Fixed 1:2.0R Target"
+            }
+
+            // TP2: opposing HTF Demand or HTF/Macro Swing Low
+            val htfDemandTarget = htf?.activeZones
+                ?.filter { it.type == TbtZoneType.DEMAND && it.top <= tp1 - risk * 0.5 && it.top > 0.0 }
+                ?.maxByOrNull { it.top }
+            val macroDemandTarget = macro?.activeZones
+                ?.filter { it.type == TbtZoneType.DEMAND && it.top <= tp1 - risk * 0.5 && it.top > 0.0 }
+                ?.maxByOrNull { it.top }
+            val candidateTp2 = listOfNotNull(
+                htfDemandTarget?.top,
+                htf?.lastSwingLow?.takeIf { it <= tp1 - risk * 0.5 && it > 0.0 },
+                macroDemandTarget?.top,
+                macro?.lastSwingLow?.takeIf { it <= tp1 - risk * 0.5 && it > 0.0 },
+                ltf.recentSwingLow.takeIf { it <= tp1 - risk * 0.5 && it > 0.0 }
+            ).maxOrNull()
+            val tp2 = (candidateTp2 ?: min(tp1 - risk * 1.4, entry - risk * 3.5))
+                .coerceAtMost(tp1 - risk * 0.8)
+                .coerceAtLeast(spot * 0.05)
+            val tp2Reason = when {
+                htfDemandTarget != null && candidateTp2 == htfDemandTarget.top -> "$htfLabel HTF Demand"
+                htf?.lastSwingLow != null && candidateTp2 == htf.lastSwingLow -> "$htfLabel External Low"
+                macroDemandTarget != null && candidateTp2 == macroDemandTarget.top -> "$macroLabel Macro Demand"
+                macro?.lastSwingLow != null && candidateTp2 == macro.lastSwingLow -> "$macroLabel External Low"
+                else -> "MTF Extension Target"
+            }
+
+            TbtTradeSetup(
+                direction = TbtTradeDirection.SELL,
+                isConfirmedEntry = confirmed,
+                confidencePercent = confidence,
+                statusLabel = if (confirmed) "SELL NOW • MTF Confirmed" else "SELL LIMIT @ Supply",
+                entryPrice = entry,
+                entryZoneLow = activeZone?.bottom ?: entry,
+                entryZoneHigh = activeZone?.top ?: sl,
+                stopLoss = sl,
+                takeProfit1 = tp1,
+                takeProfit2 = tp2,
+                riskReward1 = ((entry - tp1) / risk).coerceAtLeast(0.1),
+                riskReward2 = ((entry - tp2) / risk).coerceAtLeast(0.1),
+                slReason = slReason,
+                tp1Reason = tp1Reason,
+                tp2Reason = tp2Reason,
+                confluenceReasons = bearReasons.distinct().take(4)
+            )
+        }
+    }
+
+    private fun formatRr(rr: Double): String {
+        val rounded = kotlin.math.round(rr * 10.0) / 10.0
+        return rounded.toString()
     }
 }
