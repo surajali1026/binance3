@@ -107,8 +107,7 @@ data class ChartPreferences(
     val tbtShowHud: Boolean = true,
     val tbtShowTradeSetup: Boolean = true,
     val tbtUseMultiTimeframe: Boolean = true,
-    val tbtShowVolumeProfile: Boolean = true,
-    val tbtShowLiquidityTraps: Boolean = true
+    val tbtShowVolumeProfile: Boolean = true
 ) {
     fun toTbtSmcConfig(): TbtSmcConfig = TbtSmcConfig(
         swingLen = 5,
@@ -119,8 +118,7 @@ data class ChartPreferences(
         showHud = tbtShowHud,
         showTradeSetup = tbtShowTradeSetup,
         useMultiTimeframe = tbtUseMultiTimeframe,
-        showVolumeProfile = tbtShowVolumeProfile,
-        showLiquidityTraps = tbtShowLiquidityTraps
+        showVolumeProfile = tbtShowVolumeProfile
     )
 }
 

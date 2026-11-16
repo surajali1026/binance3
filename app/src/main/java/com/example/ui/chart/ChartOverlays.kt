@@ -466,8 +466,7 @@ fun ChartTimeframeStrip(
     onToggleTbtHud: () -> Unit = {},
     onToggleTbtTradeSetup: () -> Unit = {},
     onToggleTbtMtf: () -> Unit = {},
-    onToggleTbtVolumeProfile: () -> Unit = {},
-    onToggleTbtLiquidityTraps: () -> Unit = {}
+    onToggleTbtVolumeProfile: () -> Unit = {}
 ) {
     Row(
         modifier = Modifier
@@ -549,8 +548,7 @@ fun ChartTimeframeStrip(
             onToggleHud = onToggleTbtHud,
             onToggleTradeSetup = onToggleTbtTradeSetup,
             onToggleMtf = onToggleTbtMtf,
-            onToggleVolumeProfile = onToggleTbtVolumeProfile,
-            onToggleLiquidityTraps = onToggleTbtLiquidityTraps
+            onToggleVolumeProfile = onToggleTbtVolumeProfile
         )
 
         Spacer(modifier = Modifier.width(2.dp))
@@ -602,7 +600,6 @@ fun TbtSmcControls(
     onToggleTradeSetup: () -> Unit = {},
     onToggleMtf: () -> Unit = {},
     onToggleVolumeProfile: () -> Unit = {},
-    onToggleLiquidityTraps: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var settingsExpanded by remember { mutableStateOf(false) }
@@ -699,7 +696,7 @@ fun TbtSmcControls(
                 onClick = onToggleOverlap
             )
             TbtLayerMenuItem(
-                label = "Signals (BOS / Liq / 3CR)",
+                label = "Signals (VI / Liq / 3CR)",
                 checked = config.showSignals,
                 testTag = "tbt_layer_signals",
                 onClick = onToggleSignals
@@ -715,12 +712,6 @@ fun TbtSmcControls(
                 checked = config.showVolumeProfile,
                 testTag = "tbt_layer_volume_profile",
                 onClick = onToggleVolumeProfile
-            )
-            TbtLayerMenuItem(
-                label = "Liquidity Traps & Breakers",
-                checked = config.showLiquidityTraps,
-                testTag = "tbt_layer_liquidity_traps",
-                onClick = onToggleLiquidityTraps
             )
             TbtLayerMenuItem(
                 label = "Multi-Timeframe (MTF)",
@@ -1503,7 +1494,6 @@ fun FullScreenTimeframeBar(
     onToggleTbtTradeSetup: () -> Unit = {},
     onToggleTbtMtf: () -> Unit = {},
     onToggleTbtVolumeProfile: () -> Unit = {},
-    onToggleTbtLiquidityTraps: () -> Unit = {},
     onExitFullScreen: () -> Unit,
     showBackToWatchlist: Boolean = false,
     onBackToWatchlist: () -> Unit = {},
@@ -1612,7 +1602,6 @@ fun FullScreenTimeframeBar(
                     onToggleTradeSetup = onToggleTbtTradeSetup,
                     onToggleMtf = onToggleTbtMtf,
                     onToggleVolumeProfile = onToggleTbtVolumeProfile,
-                    onToggleLiquidityTraps = onToggleTbtLiquidityTraps,
                     modifier = Modifier.padding(end = 3.dp)
                 )
             }
@@ -1858,8 +1847,7 @@ fun FullScreenTimeframeBar(
                         onToggleHud = onToggleTbtHud,
                         onToggleTradeSetup = onToggleTbtTradeSetup,
                         onToggleMtf = onToggleTbtMtf,
-                        onToggleVolumeProfile = onToggleTbtVolumeProfile,
-                        onToggleLiquidityTraps = onToggleTbtLiquidityTraps
+                        onToggleVolumeProfile = onToggleTbtVolumeProfile
                     )
                 }
             }

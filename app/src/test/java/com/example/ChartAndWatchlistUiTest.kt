@@ -562,7 +562,6 @@ class ChartAndWatchlistUiTest {
         var tradeSetupToggled = 0
         var mtfToggled = 0
         var volumeProfileToggled = 0
-        var liquidityTrapsToggled = 0
         var alertPriceRequested: Double? = null
 
         val state = ChartUiState(
@@ -588,8 +587,7 @@ class ChartAndWatchlistUiTest {
                         onToggleTbtHud = { hudToggled++ },
                         onToggleTbtTradeSetup = { tradeSetupToggled++ },
                         onToggleTbtMtf = { mtfToggled++ },
-                        onToggleTbtVolumeProfile = { volumeProfileToggled++ },
-                        onToggleTbtLiquidityTraps = { liquidityTrapsToggled++ }
+                        onToggleTbtVolumeProfile = { volumeProfileToggled++ }
                     )
                     com.example.ui.chart.TbtConditionHudBadge(
                         summary = com.example.domain.indicator.TbtConditionSummary(
@@ -599,7 +597,7 @@ class ChartAndWatchlistUiTest {
                             lastSignal = "3CR BUY Confirmed",
                             mtfBiases = listOf(
                                 com.example.domain.indicator.TbtTimeframeBiasInfo("15m", "LTF", com.example.domain.indicator.TbtMarketBias.BULLISH, "3CR BUY"),
-                                com.example.domain.indicator.TbtTimeframeBiasInfo("1H", "HTF", com.example.domain.indicator.TbtMarketBias.BULLISH, "BOS"),
+                                com.example.domain.indicator.TbtTimeframeBiasInfo("1H", "HTF", com.example.domain.indicator.TbtMarketBias.BULLISH, "3CR"),
                                 com.example.domain.indicator.TbtTimeframeBiasInfo("4H", "Macro", com.example.domain.indicator.TbtMarketBias.BULLISH, "Bullish")
                             ),
                             mtfAlignmentLabel = "Full Bullish MTF (3/3)",
@@ -659,7 +657,7 @@ class ChartAndWatchlistUiTest {
         composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
         assertEquals(1, mainToggled)
 
-        // Settings popover opens and toggles all 9 layers including Volume Profile and Liquidity Traps & Breakers
+        // Settings popover opens and toggles all 8 layers including Volume Profile
         composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed().performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("tbt_smc_settings_menu").assertIsDisplayed()
@@ -669,7 +667,6 @@ class ChartAndWatchlistUiTest {
         composeTestRule.onNodeWithTag("tbt_layer_signals").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_trade_setup").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_volume_profile").performClick()
-        composeTestRule.onNodeWithTag("tbt_layer_liquidity_traps").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_mtf").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_hud").performClick()
         assertEquals(1, zonesToggled)
@@ -678,7 +675,6 @@ class ChartAndWatchlistUiTest {
         assertEquals(1, signalsToggled)
         assertEquals(1, tradeSetupToggled)
         assertEquals(1, volumeProfileToggled)
-        assertEquals(1, liquidityTrapsToggled)
         assertEquals(1, mtfToggled)
         assertEquals(1, hudToggled)
     }

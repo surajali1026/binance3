@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
         AlertHistoryEntity::class,
         ChartPreferencesEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -64,6 +64,61 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS chart_preferences_new (
+                        id INTEGER NOT NULL,
+                        lastSymbol TEXT NOT NULL,
+                        lastTimeframeId TEXT NOT NULL,
+                        lastPriceSource TEXT NOT NULL,
+                        bullColorHex INTEGER NOT NULL,
+                        bearColorHex INTEGER NOT NULL,
+                        showGrid INTEGER NOT NULL,
+                        showCountdown INTEGER NOT NULL,
+                        autoFitDefault INTEGER NOT NULL,
+                        backgroundMonitorEnabled INTEGER NOT NULL,
+                        loudSoundEnabled INTEGER NOT NULL,
+                        vibrationEnabled INTEGER NOT NULL,
+                        lastBarSpacingDp REAL NOT NULL,
+                        lastRightOffsetBars REAL NOT NULL,
+                        showTbtSmc INTEGER NOT NULL,
+                        tbtShowZones INTEGER NOT NULL,
+                        tbtShowPowerShift INTEGER NOT NULL,
+                        tbtShowOverlap INTEGER NOT NULL,
+                        tbtShowSignals INTEGER NOT NULL,
+                        tbtShowHud INTEGER NOT NULL,
+                        tbtShowTradeSetup INTEGER NOT NULL,
+                        tbtUseMultiTimeframe INTEGER NOT NULL,
+                        tbtShowVolumeProfile INTEGER NOT NULL,
+                        PRIMARY KEY(id)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO chart_preferences_new (
+                        id, lastSymbol, lastTimeframeId, lastPriceSource, bullColorHex, bearColorHex,
+                        showGrid, showCountdown, autoFitDefault, backgroundMonitorEnabled, loudSoundEnabled,
+                        vibrationEnabled, lastBarSpacingDp, lastRightOffsetBars, showTbtSmc, tbtShowZones,
+                        tbtShowPowerShift, tbtShowOverlap, tbtShowSignals, tbtShowHud, tbtShowTradeSetup,
+                        tbtUseMultiTimeframe, tbtShowVolumeProfile
+                    )
+                    SELECT
+                        id, lastSymbol, lastTimeframeId, lastPriceSource, bullColorHex, bearColorHex,
+                        showGrid, showCountdown, autoFitDefault, backgroundMonitorEnabled, loudSoundEnabled,
+                        vibrationEnabled, lastBarSpacingDp, lastRightOffsetBars, showTbtSmc, tbtShowZones,
+                        tbtShowPowerShift, tbtShowOverlap, tbtShowSignals, tbtShowHud, tbtShowTradeSetup,
+                        tbtUseMultiTimeframe, tbtShowVolumeProfile
+                    FROM chart_preferences
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE chart_preferences")
+                db.execSQL("ALTER TABLE chart_preferences_new RENAME TO chart_preferences")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: buildDatabase(context.applicationContext).also { INSTANCE = it }
@@ -75,7 +130,7 @@ abstract class AppDatabase : RoomDatabase() {
                 context,
                 AppDatabase::class.java,
                 "binance_pro.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .addCallback(object : Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {
                     super.onCreate(db)

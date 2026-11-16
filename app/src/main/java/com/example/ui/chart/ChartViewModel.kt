@@ -1476,10 +1476,6 @@ class ChartViewModel(
         updatePreferences { it.copy(tbtShowVolumeProfile = !it.tbtShowVolumeProfile) }
     }
 
-    fun toggleTbtLiquidityTraps() {
-        updatePreferences { it.copy(tbtShowLiquidityTraps = !it.tbtShowLiquidityTraps) }
-    }
-
     fun toggleTbtMultiTimeframe() {
         val nextEnabled = !uiState.value.preferences.tbtUseMultiTimeframe
         updatePreferences { it.copy(tbtUseMultiTimeframe = nextEnabled) }

@@ -549,6 +549,7 @@ class TradingCoreUnitTest {
         assertTrue(fullOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.POWER_SHIFT })
         assertEquals(99.6, fullOut.summary.activeBullPower!!, 0.0001)
         assertTrue(fullOut.markers.any { it.text == "3CR BUY" })
+        assertTrue(fullOut.markers.none { it.text == "BOS" || it.text == "CHoCH" })
         assertEquals(com.example.domain.indicator.TbtMarketBias.BULLISH, fullOut.summary.bias)
 
         // 3. Respects layer toggles (zones, signals, and trade setup hidden)
@@ -560,8 +561,7 @@ class TradingCoreUnitTest {
                 showOverlap = false,
                 showSignals = false,
                 showTradeSetup = false,
-                showVolumeProfile = false,
-                showLiquidityTraps = false
+                showVolumeProfile = false
             )
         )
         assertTrue(filteredOut.priceLines.isEmpty())
@@ -680,6 +680,7 @@ class TradingCoreUnitTest {
         assertTrue(buyOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_SL })
         assertTrue(buyOut.priceLines.none { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_TP })
         assertTrue(buyOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.VOLUME_PROFILE })
+        assertTrue(buyOut.markers.none { it.text == "BOS" || it.text == "CHoCH" })
 
         // Bearish MTF alignment: steady downtrend on 1H & 4H + LTF RBD supply + tap + drop
         val ltfBear = mutableListOf<Candle>()
@@ -790,106 +791,5 @@ class TradingCoreUnitTest {
             mtfInput = com.example.domain.indicator.TbtMtfInput(spotCandles = spot)
         )
         assertTrue(hiddenVp.priceLines.none { it.category == com.example.domain.indicator.TbtPriceLineCategory.VOLUME_PROFILE })
-    }
-
-    @Test
-    fun `tbt smc phase 2 detects eql eqh traps breaker flip zones idm sweep and htf overlap`() {
-        val baseTime = 1_750_000_000_000L
-        val step = 900_000L
-        fun bar(idx: Int, o: Double, h: Double, l: Double, c: Double, vol: Double = 1000.0) = Candle(
-            openTime = baseTime + idx * step,
-            closeTime = baseTime + idx * step + step - 1L,
-            open = o,
-            high = h,
-            low = l,
-            close = c,
-            volume = vol,
-            isClosed = true
-        )
-
-        // Build sequence with:
-        // 1) An RBD Supply zone created around bar 17 (top ~102.0, bottom ~100.8)
-        // 2) Two Equal Lows near 98.0 (indices 18 and 25, separated by >= 3 bars with swingLen=5)
-        // 3) Bar 31 sweeps below EQL 98.0 (low 97.4) and closes above 98.0 -> EQL Trap
-        // 4) Bar 32 breaks strongly above Supply top 102.0 -> Bullish Flip (Breaker)
-        val candles = mutableListOf<Candle>()
-        for (i in 0..15) {
-            candles.add(bar(i, 100.0, 101.2, 99.0, if (i % 2 == 0) 100.4 else 99.6))
-        }
-        candles.add(bar(16, 101.0, 102.0, 100.8, 101.2)) // base
-        candles.add(bar(17, 101.0, 101.1, 98.2, 98.4, 2500.0)) // RBD Supply drop (top 102.0, bottom 100.8)
-        candles.add(bar(18, 98.5, 99.0, 98.0, 98.8)) // 1st Swing Low @ 98.0
-        candles.add(bar(19, 98.8, 99.4, 98.4, 99.2))
-        candles.add(bar(20, 99.2, 100.0, 98.9, 99.8))
-        candles.add(bar(21, 99.8, 100.3, 99.2, 99.5))
-        candles.add(bar(22, 99.5, 100.2, 99.0, 99.4))
-        candles.add(bar(23, 99.4, 100.1, 98.8, 99.1))
-        candles.add(bar(24, 99.1, 99.5, 98.5, 98.6))
-        candles.add(bar(25, 98.6, 99.2, 98.05, 98.9)) // 2nd Swing Low ~98.05 -> forms EQL Pool
-        candles.add(bar(26, 98.9, 99.8, 98.6, 99.6))
-        candles.add(bar(27, 99.6, 100.2, 99.2, 99.9))
-        candles.add(bar(28, 99.9, 100.5, 99.5, 100.1))
-        candles.add(bar(29, 100.1, 100.4, 99.6, 99.8))
-        candles.add(bar(30, 99.8, 100.0, 98.8, 99.0))
-        // Bar 31: sweeps below EQL 98.0 -> low 97.4, closes 99.2 -> EQL Trap!
-        candles.add(bar(31, 99.0, 99.4, 97.4, 99.2, 4200.0))
-        // Bar 32..34: impulse rally breaking Supply (top 102.0) -> Bullish Flip (Breaker)
-        candles.add(bar(32, 99.2, 102.9, 99.1, 102.8, 5200.0))
-        candles.add(bar(33, 102.8, 103.4, 101.6, 102.3, 3000.0)) // taps Bullish Flip zone
-
-        // HTF Bullish Demand overlapping near 100.5..102.5
-        val htfCandles = mutableListOf<Candle>()
-        for (i in 0..15) {
-            htfCandles.add(
-                Candle(
-                    openTime = baseTime + i * 3_600_000L,
-                    closeTime = baseTime + i * 3_600_000L + 3_599_999L,
-                    open = 100.0,
-                    high = 101.2,
-                    low = 99.0,
-                    close = if (i % 2 == 0) 100.5 else 99.5,
-                    volume = 2000.0,
-                    isClosed = true
-                )
-            )
-        }
-        htfCandles.add(Candle(baseTime + 16 * 3_600_000L, baseTime + 17 * 3_600_000L - 1L, 101.2, 101.9, 100.8, 101.1, 1500.0, true))
-        htfCandles.add(Candle(baseTime + 17 * 3_600_000L, baseTime + 18 * 3_600_000L - 1L, 101.1, 105.5, 101.0, 105.2, 6000.0, true))
-        for (i in 18..25) {
-            val o = 102.0 + (i - 18) * 0.4
-            htfCandles.add(Candle(baseTime + i * 3_600_000L, baseTime + (i + 1) * 3_600_000L - 1L, o, o + 1.0, o - 0.5, o + 0.6, 2200.0, true))
-        }
-
-        val out = com.example.domain.indicator.TbtSmcEngine.calculate(
-            candles = candles,
-            config = com.example.domain.indicator.TbtSmcConfig(
-                showLiquidityTraps = true,
-                showOverlap = true,
-                showTradeSetup = true,
-                useMultiTimeframe = true
-            ),
-            mtfInput = com.example.domain.indicator.TbtMtfInput(
-                currentTfLabel = "15m",
-                htfLabel = "1H",
-                htfCandles = htfCandles,
-                macroLabel = "4H",
-                macroCandles = htfCandles
-            )
-        )
-
-        assertTrue(out.markers.any { it.text == "EQL Trap" })
-        assertTrue(out.markers.any { it.text == "Bull Flip" })
-        assertTrue(out.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.BREAKER_FLIP })
-        assertTrue(out.priceLines.any { it.title == "HTF+LTF Overlap (BUY)" })
-        assertEquals(com.example.domain.indicator.TbtTradeDirection.BUY, out.summary.tradeSetup.direction)
-        assertTrue(out.summary.tradeSetup.confluenceReasons.any { it.contains("EQL Trap") || it.contains("Breaker Flip") || it.contains("Overlapping") })
-
-        // Verify showLiquidityTraps = false hides BREAKER_FLIP & LIQUIDITY_POOL price lines
-        val noTrapsOut = com.example.domain.indicator.TbtSmcEngine.calculate(
-            candles = candles,
-            config = com.example.domain.indicator.TbtSmcConfig(showLiquidityTraps = false)
-        )
-        assertTrue(noTrapsOut.priceLines.none { it.category == com.example.domain.indicator.TbtPriceLineCategory.BREAKER_FLIP })
-        assertTrue(noTrapsOut.priceLines.none { it.category == com.example.domain.indicator.TbtPriceLineCategory.LIQUIDITY_POOL })
     }
 }
