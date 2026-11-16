@@ -10,7 +10,9 @@ enum class TbtZoneType {
     DEMAND,
     SUPPLY,
     FVG_BULL,
-    FVG_BEAR
+    FVG_BEAR,
+    BREAKER_BULL,
+    BREAKER_BEAR
 }
 
 data class TbtZone(
@@ -28,6 +30,8 @@ enum class TbtPriceLineCategory {
     HTF_ZONE,
     POWER_SHIFT,
     OVERLAP,
+    LIQUIDITY_POOL,
+    BREAKER_FLIP,
     VOLUME_PROFILE,
     TRADE_ENTRY,
     TRADE_SL,
@@ -114,7 +118,8 @@ data class TbtSmcConfig(
     val showHud: Boolean = true,
     val showTradeSetup: Boolean = true,
     val useMultiTimeframe: Boolean = true,
-    val showVolumeProfile: Boolean = true
+    val showVolumeProfile: Boolean = true,
+    val showLiquidityTraps: Boolean = true
 )
 
 data class TbtMtfInput(
@@ -214,14 +219,25 @@ private data class OverlappingLevel(
     val type: String
 )
 
+private data class SwingPoint(
+    val idx: Int,
+    val price: Double,
+    val timeMillis: Long
+)
+
 private data class SingleTfAnalysis(
     val bias: TbtMarketBias,
     val structureBias: Int, // 1 bull, -1 bear, 0 neutral
     val markers: List<TbtMarker>,
     val activeZones: List<TbtZone>,
+    val breakerZones: List<TbtZone>,
     val overlappingLevels: List<OverlappingLevel>,
     val activeBullPower: Double?,
     val activeBearPower: Double?,
+    val activeEqhPrice: Double?,
+    val activeEqlPrice: Double?,
+    val activeBullIdmPrice: Double?,
+    val activeBearIdmPrice: Double?,
     val lastSignal: String,
     val lastSwingHigh: Double?,
     val lastSwingLow: Double?,
@@ -230,6 +246,12 @@ private data class SingleTfAnalysis(
     val atr: Double,
     val lastBullConfirmIdx: Int,
     val lastBearConfirmIdx: Int,
+    val lastBullIdmSweepIdx: Int,
+    val lastBearIdmSweepIdx: Int,
+    val lastEqlTrapIdx: Int,
+    val lastEqhTrapIdx: Int,
+    val lastBullFlipIdx: Int,
+    val lastBearFlipIdx: Int,
     val candleCount: Int
 )
 
@@ -303,6 +325,21 @@ object TbtSmcEngine {
             spotPrice = spot
         )
 
+        val ltfAtr = ltf.atr.coerceAtLeast(spot * 0.0015)
+        val overlapMargin = ltfAtr * 0.35
+        val overlappingHtfBullPoi = htfAnalysis?.activeZones
+            ?.filter { it.type == TbtZoneType.DEMAND }
+            ?.firstOrNull { htfZ ->
+                (ltf.activeZones.filter { it.type == TbtZoneType.DEMAND } + ltf.breakerZones.filter { it.type == TbtZoneType.BREAKER_BULL })
+                    .any { ltfZ -> min(ltfZ.top, htfZ.top) >= max(ltfZ.bottom, htfZ.bottom) - overlapMargin }
+            }
+        val overlappingHtfBearPoi = htfAnalysis?.activeZones
+            ?.filter { it.type == TbtZoneType.SUPPLY }
+            ?.firstOrNull { htfZ ->
+                (ltf.activeZones.filter { it.type == TbtZoneType.SUPPLY } + ltf.breakerZones.filter { it.type == TbtZoneType.BREAKER_BEAR })
+                    .any { ltfZ -> min(ltfZ.top, htfZ.top) >= max(ltfZ.bottom, htfZ.bottom) - overlapMargin }
+            }
+
         val tradeSetup = buildTradeSetup(
             candles = candles,
             ltf = ltf,
@@ -311,7 +348,9 @@ object TbtSmcEngine {
             macroLabel = mtfInput?.macroLabel ?: "Macro",
             macro = macroAnalysis,
             dealingZoneLabel = dealingZoneLabel,
-            volumeProfile = volumeProfile
+            volumeProfile = volumeProfile,
+            hasHtfBullOverlap = overlappingHtfBullPoi != null,
+            hasHtfBearOverlap = overlappingHtfBearPoi != null
         )
 
         // Assemble PriceLines
@@ -423,6 +462,94 @@ object TbtSmcEngine {
                     )
                 )
             }
+            overlappingHtfBullPoi?.let { htfPoi ->
+                priceLines.add(
+                    TbtPriceLine(
+                        price = htfPoi.top,
+                        title = "HTF+LTF Overlap (BUY)",
+                        colorHex = "#aa00ff",
+                        lineStyle = 1,
+                        lineWidth = 2,
+                        category = TbtPriceLineCategory.OVERLAP
+                    )
+                )
+            }
+            overlappingHtfBearPoi?.let { htfPoi ->
+                priceLines.add(
+                    TbtPriceLine(
+                        price = htfPoi.bottom,
+                        title = "HTF+LTF Overlap (SELL)",
+                        colorHex = "#aa00ff",
+                        lineStyle = 1,
+                        lineWidth = 2,
+                        category = TbtPriceLineCategory.OVERLAP
+                    )
+                )
+            }
+        }
+
+        if (config.showLiquidityTraps) {
+            ltf.activeEqhPrice?.let { price ->
+                priceLines.add(
+                    TbtPriceLine(
+                        price = price,
+                        title = "EQH Liq Pool",
+                        colorHex = "#ff9100",
+                        lineStyle = 1,
+                        lineWidth = 1,
+                        category = TbtPriceLineCategory.LIQUIDITY_POOL
+                    )
+                )
+            }
+            ltf.activeEqlPrice?.let { price ->
+                priceLines.add(
+                    TbtPriceLine(
+                        price = price,
+                        title = "EQL Liq Pool",
+                        colorHex = "#00e5ff",
+                        lineStyle = 1,
+                        lineWidth = 1,
+                        category = TbtPriceLineCategory.LIQUIDITY_POOL
+                    )
+                )
+            }
+            ltf.activeBullIdmPrice?.takeIf { spot > it }?.let { price ->
+                priceLines.add(
+                    TbtPriceLine(
+                        price = price,
+                        title = "Bull IDM",
+                        colorHex = "#ffd600",
+                        lineStyle = 1,
+                        lineWidth = 1,
+                        category = TbtPriceLineCategory.LIQUIDITY_POOL
+                    )
+                )
+            }
+            ltf.activeBearIdmPrice?.takeIf { spot < it }?.let { price ->
+                priceLines.add(
+                    TbtPriceLine(
+                        price = price,
+                        title = "Bear IDM",
+                        colorHex = "#ffd600",
+                        lineStyle = 1,
+                        lineWidth = 1,
+                        category = TbtPriceLineCategory.LIQUIDITY_POOL
+                    )
+                )
+            }
+            ltf.breakerZones.forEach { b ->
+                val isBullBreaker = b.type == TbtZoneType.BREAKER_BULL
+                priceLines.add(
+                    TbtPriceLine(
+                        price = if (isBullBreaker) b.top else b.bottom,
+                        title = b.label,
+                        colorHex = if (isBullBreaker) "#1de9b6" else "#ff6d00",
+                        lineStyle = 2,
+                        lineWidth = 2,
+                        category = TbtPriceLineCategory.BREAKER_FLIP
+                    )
+                )
+            }
         }
 
         if (config.showVolumeProfile) {
@@ -483,6 +610,7 @@ object TbtSmcEngine {
         // Zones exposed for internal POI logic (not rendered as red/green rectangles on chart)
         val exposedZones = buildList {
             addAll(recentLtfZones)
+            addAll(ltf.breakerZones)
             addAll(ltf.activeZones.filter { it.type == TbtZoneType.FVG_BULL || it.type == TbtZoneType.FVG_BEAR }.takeLast(3))
         }
 
@@ -512,8 +640,8 @@ object TbtSmcEngine {
         emitChartMarkers: Boolean
     ): SingleTfAnalysis {
         val sLen = config.swingLen.coerceAtLeast(2)
-        // Key by (timeMillis, position) so an aboveBar and belowBar marker on the same bar don't erase each other
-        val markerMap = LinkedHashMap<Pair<Long, String>, Pair<Int, TbtMarker>>()
+        // Key by (timeMillis, position, slot) so major distinct institutional signals (>= 3) are never erased by low-priority clutter
+        val markerMap = LinkedHashMap<Triple<Long, String, String>, Pair<Int, TbtMarker>>()
 
         fun addMarker(
             timeMillis: Long,
@@ -524,9 +652,15 @@ object TbtSmcEngine {
             priority: Int
         ) {
             if (!emitChartMarkers) return
-            val key = timeMillis to position
+            val slot = if (priority >= 3) text else "_bg_"
+            if (priority >= 3) {
+                markerMap.remove(Triple(timeMillis, position, "_bg_"))
+            } else if (markerMap.keys.any { it.first == timeMillis && it.second == position && it.third != "_bg_" }) {
+                return
+            }
+            val key = Triple(timeMillis, position, slot)
             val existing = markerMap[key]
-            if (existing == null || existing.first <= priority) {
+            if (existing == null || existing.first < priority) {
                 markerMap[key] = priority to TbtMarker(
                     timeMillis = timeMillis,
                     position = position,
@@ -569,12 +703,25 @@ object TbtSmcEngine {
         var structureBias = 0 // 1 bullish, -1 bearish
 
         val activeZones = mutableListOf<MutableTbtZone>()
+        val breakerZones = mutableListOf<MutableTbtZone>()
         val overlappingLevels = mutableListOf<OverlappingLevel>()
+        val recentSwingHighs = mutableListOf<SwingPoint>()
+        val recentSwingLows = mutableListOf<SwingPoint>()
+        var activeEqh: SwingPoint? = null
+        var activeEql: SwingPoint? = null
+        var activeBullIdm: SwingPoint? = null
+        var activeBearIdm: SwingPoint? = null
         var activeBullPower: Double? = null
         var activeBearPower: Double? = null
         var lastSignal = "Neutral"
         var lastBullConfirmIdx = -999
         var lastBearConfirmIdx = -999
+        var lastBullIdmSweepIdx = -999
+        var lastBearIdmSweepIdx = -999
+        var lastEqlTrapIdx = -999
+        var lastEqhTrapIdx = -999
+        var lastBullFlipIdx = -999
+        var lastBearFlipIdx = -999
         var lastBuySetupIdx = -999
         var lastSellSetupIdx = -999
 
@@ -594,11 +741,12 @@ object TbtSmcEngine {
             val avgBody = getSma(bodySizes, i, 14)
             val atr = getSma(trueRanges, i, 14)
 
-            // 1. Swing High / Low
+            // 1. Swing High / Low + EQH/EQL + Inducement (IDM) Tracking
             if (i >= sLen * 2) {
                 val pivotIdx = i - sLen
                 val pHigh = candles[pivotIdx].high
                 val pLow = candles[pivotIdx].low
+                val pTime = candles[pivotIdx].openTime
                 var isSH = true
                 var isSL = true
                 for (k in (pivotIdx - sLen)..(pivotIdx + sLen)) {
@@ -606,8 +754,52 @@ object TbtSmcEngine {
                     if (candles[k].low < pLow) isSL = false
                     if (!isSH && !isSL) break
                 }
-                if (isSH) lastSwingHigh = pHigh
-                if (isSL) lastSwingLow = pLow
+                val eqTol = max(atr * 0.28, pHigh * 0.0008)
+                if (isSH) {
+                    lastSwingHigh = pHigh
+                    val matchedEqh = recentSwingHighs.lastOrNull { prev ->
+                        pivotIdx - prev.idx >= 3 &&
+                            abs(pHigh - prev.price) <= eqTol &&
+                            (prev.idx + 1 until i).all { candles[it].close <= max(pHigh, prev.price) }
+                    }
+                    if (matchedEqh != null) {
+                        activeEqh = SwingPoint(pivotIdx, max(pHigh, matchedEqh.price), pTime)
+                    }
+                    recentSwingHighs.add(SwingPoint(pivotIdx, pHigh, pTime))
+                    if (recentSwingHighs.size > 8) recentSwingHighs.removeAt(0)
+
+                    // Bearish IDM: minor swing high positioned strictly below an active untapped Supply POI
+                    val supplyAbove = activeZones.any { !it.tapped && it.type == TbtZoneType.SUPPLY && it.bottom > pHigh }
+                    if (supplyAbove || structureBias == -1) {
+                        val existing = activeBearIdm
+                        if (existing == null || pHigh < existing.price) {
+                            activeBearIdm = SwingPoint(pivotIdx, pHigh, pTime)
+                        }
+                    }
+                }
+                if (isSL) {
+                    lastSwingLow = pLow
+                    val eqLowTol = max(atr * 0.28, pLow * 0.0008)
+                    val matchedEql = recentSwingLows.lastOrNull { prev ->
+                        pivotIdx - prev.idx >= 3 &&
+                            abs(pLow - prev.price) <= eqLowTol &&
+                            (prev.idx + 1 until i).all { candles[it].close >= min(pLow, prev.price) }
+                    }
+                    if (matchedEql != null) {
+                        activeEql = SwingPoint(pivotIdx, min(pLow, matchedEql.price), pTime)
+                    }
+                    recentSwingLows.add(SwingPoint(pivotIdx, pLow, pTime))
+                    if (recentSwingLows.size > 8) recentSwingLows.removeAt(0)
+
+                    // Bullish IDM: minor swing low positioned strictly above an active untapped Demand POI
+                    val demandBelow = activeZones.any { !it.tapped && it.type == TbtZoneType.DEMAND && it.top < pLow }
+                    if (demandBelow || structureBias == 1) {
+                        val existing = activeBullIdm
+                        if (existing == null || pLow > existing.price) {
+                            activeBullIdm = SwingPoint(pivotIdx, pLow, pTime)
+                        }
+                    }
+                }
             }
 
             // 2. BOS / CHoCH + Overlapping Level (S/R Flip POI)
@@ -693,7 +885,7 @@ object TbtSmcEngine {
                 )
             }
 
-            // 4. Manage Active Zones & Power Shift
+            // 4. Manage Active Zones, Power Shift & Breaker / S-D Flip Promotion
             var tappedDemandThisBar = false
             var tappedSupplyThisBar = false
             for (j in activeZones.indices.reversed()) {
@@ -701,26 +893,192 @@ object TbtSmcEngine {
                 if (z.type == TbtZoneType.DEMAND) {
                     if (c.close < z.bottom) {
                         activeZones.removeAt(j)
+                        if (bodySizes[i] > avgBody * 1.15 || z.tapped) {
+                            breakerZones.add(
+                                MutableTbtZone(
+                                    id = "FLIP_BEAR_$i",
+                                    type = TbtZoneType.BREAKER_BEAR,
+                                    startTimeMillis = c.openTime,
+                                    top = z.top,
+                                    bottom = z.bottom,
+                                    tapped = false,
+                                    label = "Bearish Flip"
+                                )
+                            )
+                            while (breakerZones.size > 2) breakerZones.removeAt(0)
+                            if (config.showLiquidityTraps && config.showSignals) {
+                                addMarker(
+                                    timeMillis = c.openTime,
+                                    position = "aboveBar",
+                                    colorHex = "#ff6d00",
+                                    shape = "arrowDown",
+                                    text = "Bear Flip",
+                                    priority = 4
+                                )
+                            }
+                            lastBearFlipIdx = i
+                            lastBearConfirmIdx = i
+                            lastSignal = "Bearish S/D Flip"
+                        }
                     } else if (!z.tapped && c.low <= z.top && c.close > z.bottom && c.openTime != z.startTimeMillis) {
                         z.tapped = true
                         z.label = "${z.label} (Tapped)"
                         activeBullPower = c.low
                         tappedDemandThisBar = true
+                        activeBullIdm = null
                     } else if (z.tapped && c.low <= z.top && c.close > z.bottom) {
                         tappedDemandThisBar = true
+                        activeBullIdm = null
                     }
                 } else if (z.type == TbtZoneType.SUPPLY) {
                     if (c.close > z.top) {
                         activeZones.removeAt(j)
+                        if (bodySizes[i] > avgBody * 1.15 || z.tapped) {
+                            breakerZones.add(
+                                MutableTbtZone(
+                                    id = "FLIP_BULL_$i",
+                                    type = TbtZoneType.BREAKER_BULL,
+                                    startTimeMillis = c.openTime,
+                                    top = z.top,
+                                    bottom = z.bottom,
+                                    tapped = false,
+                                    label = "Bullish Flip"
+                                )
+                            )
+                            while (breakerZones.size > 2) breakerZones.removeAt(0)
+                            if (config.showLiquidityTraps && config.showSignals) {
+                                addMarker(
+                                    timeMillis = c.openTime,
+                                    position = "belowBar",
+                                    colorHex = "#1de9b6",
+                                    shape = "arrowUp",
+                                    text = "Bull Flip",
+                                    priority = 4
+                                )
+                            }
+                            lastBullFlipIdx = i
+                            lastBullConfirmIdx = i
+                            lastSignal = "Bullish S/D Flip"
+                        }
                     } else if (!z.tapped && c.high >= z.bottom && c.close < z.top && c.openTime != z.startTimeMillis) {
                         z.tapped = true
                         z.label = "${z.label} (Tapped)"
                         activeBearPower = c.high
                         tappedSupplyThisBar = true
+                        activeBearIdm = null
                     } else if (z.tapped && c.high >= z.bottom && c.close < z.top) {
                         tappedSupplyThisBar = true
+                        activeBearIdm = null
                     }
                 }
+            }
+
+            // Manage active Breaker / Flip Zones
+            for (j in breakerZones.indices.reversed()) {
+                val b = breakerZones[j]
+                if (b.startTimeMillis == c.openTime) continue
+                if (b.type == TbtZoneType.BREAKER_BULL) {
+                    if (c.close < b.bottom) {
+                        breakerZones.removeAt(j)
+                    } else if (c.low <= b.top && c.close >= b.bottom) {
+                        b.tapped = true
+                    }
+                } else if (b.type == TbtZoneType.BREAKER_BEAR) {
+                    if (c.close > b.top) {
+                        breakerZones.removeAt(j)
+                    } else if (c.high >= b.bottom && c.close <= b.top) {
+                        b.tapped = true
+                    }
+                }
+            }
+
+            // Evaluate EQH / EQL Traps & Inducement (IDM) Sweeps
+            val eqhPt = activeEqh
+            if (eqhPt != null && i > eqhPt.idx) {
+                if (c.high > eqhPt.price && c.close <= eqhPt.price) {
+                    if (config.showLiquidityTraps && config.showSignals) {
+                        addMarker(
+                            timeMillis = c.openTime,
+                            position = "aboveBar",
+                            colorHex = "#ff6d00",
+                            shape = "arrowDown",
+                            text = "EQH Trap",
+                            priority = 3
+                        )
+                    }
+                    lastEqhTrapIdx = i
+                    lastBearConfirmIdx = i
+                    lastSignal = "Bearish EQH Trap"
+                    activeEqh = null
+                } else if (c.close > eqhPt.price) {
+                    activeEqh = null
+                }
+            }
+            val eqlPt = activeEql
+            if (eqlPt != null && i > eqlPt.idx) {
+                if (c.low < eqlPt.price && c.close >= eqlPt.price) {
+                    if (config.showLiquidityTraps && config.showSignals) {
+                        addMarker(
+                            timeMillis = c.openTime,
+                            position = "belowBar",
+                            colorHex = "#00e676",
+                            shape = "arrowUp",
+                            text = "EQL Trap",
+                            priority = 3
+                        )
+                    }
+                    lastEqlTrapIdx = i
+                    lastBullConfirmIdx = i
+                    lastSignal = "Bullish EQL Trap"
+                    activeEql = null
+                } else if (c.close < eqlPt.price) {
+                    activeEql = null
+                }
+            }
+
+            val bullIdmPt = activeBullIdm
+            if (bullIdmPt != null && i > bullIdmPt.idx && c.low < bullIdmPt.price) {
+                val heldDemandFloor = activeZones.none { it.type == TbtZoneType.DEMAND } ||
+                    c.close > (activeZones.filter { it.type == TbtZoneType.DEMAND }.minOfOrNull { it.bottom } ?: Double.MIN_VALUE)
+                if (heldDemandFloor) {
+                    lastBullIdmSweepIdx = i
+                    if (config.showLiquidityTraps && config.showSignals) {
+                        addMarker(
+                            timeMillis = c.openTime,
+                            position = "belowBar",
+                            colorHex = "#00e5ff",
+                            shape = "circle",
+                            text = "IDM Swept",
+                            priority = 2
+                        )
+                    }
+                    if (lastSignal == "Neutral" || c.close >= bullIdmPt.price) {
+                        lastSignal = "Bullish IDM Swept"
+                    }
+                }
+                activeBullIdm = null
+            }
+            val bearIdmPt = activeBearIdm
+            if (bearIdmPt != null && i > bearIdmPt.idx && c.high > bearIdmPt.price) {
+                val heldSupplyCeil = activeZones.none { it.type == TbtZoneType.SUPPLY } ||
+                    c.close < (activeZones.filter { it.type == TbtZoneType.SUPPLY }.maxOfOrNull { it.top } ?: Double.MAX_VALUE)
+                if (heldSupplyCeil) {
+                    lastBearIdmSweepIdx = i
+                    if (config.showLiquidityTraps && config.showSignals) {
+                        addMarker(
+                            timeMillis = c.openTime,
+                            position = "aboveBar",
+                            colorHex = "#ff9100",
+                            shape = "circle",
+                            text = "IDM Swept",
+                            priority = 2
+                        )
+                    }
+                    if (lastSignal == "Neutral" || c.close <= bearIdmPt.price) {
+                        lastSignal = "Bearish IDM Swept"
+                    }
+                }
+                activeBearIdm = null
             }
 
             val bullPwr = activeBullPower
@@ -904,7 +1262,8 @@ object TbtSmcEngine {
                 it.type == TbtZoneType.SUPPLY && c.high >= it.bottom - atr * 0.35 && c.close <= it.top
             }
             if (config.showTradeSetup && config.showSignals && i - lastBuySetupIdx >= 5 &&
-                !bull3cr && nearDemand && (bullSweep || structureBias == 1 && isBull && bodySizes[i] > avgBody * 1.1)
+                !bull3cr && lastEqlTrapIdx != i && lastBullFlipIdx != i &&
+                nearDemand && (bullSweep || structureBias == 1 && isBull && bodySizes[i] > avgBody * 1.1)
             ) {
                 lastBuySetupIdx = i
                 addMarker(
@@ -919,7 +1278,8 @@ object TbtSmcEngine {
                 lastBullConfirmIdx = i
             }
             if (config.showTradeSetup && config.showSignals && i - lastSellSetupIdx >= 5 &&
-                !bear3cr && nearSupply && (bearSweep || structureBias == -1 && isBear && bodySizes[i] > avgBody * 1.1)
+                !bear3cr && lastEqhTrapIdx != i && lastBearFlipIdx != i &&
+                nearSupply && (bearSweep || structureBias == -1 && isBear && bodySizes[i] > avgBody * 1.1)
             ) {
                 lastSellSetupIdx = i
                 addMarker(
@@ -964,9 +1324,14 @@ object TbtSmcEngine {
             structureBias = structureBias,
             markers = markers,
             activeZones = activeZones.map { it.toImmutable() },
+            breakerZones = breakerZones.map { it.toImmutable() },
             overlappingLevels = overlappingLevels.toList(),
             activeBullPower = activeBullPower,
             activeBearPower = activeBearPower,
+            activeEqhPrice = activeEqh?.price,
+            activeEqlPrice = activeEql?.price,
+            activeBullIdmPrice = activeBullIdm?.price,
+            activeBearIdmPrice = activeBearIdm?.price,
             lastSignal = lastSignal,
             lastSwingHigh = lastSwingHigh,
             lastSwingLow = lastSwingLow,
@@ -975,6 +1340,12 @@ object TbtSmcEngine {
             atr = lastAtr,
             lastBullConfirmIdx = lastBullConfirmIdx,
             lastBearConfirmIdx = lastBearConfirmIdx,
+            lastBullIdmSweepIdx = lastBullIdmSweepIdx,
+            lastBearIdmSweepIdx = lastBearIdmSweepIdx,
+            lastEqlTrapIdx = lastEqlTrapIdx,
+            lastEqhTrapIdx = lastEqhTrapIdx,
+            lastBullFlipIdx = lastBullFlipIdx,
+            lastBearFlipIdx = lastBearFlipIdx,
             candleCount = candles.size
         )
     }
@@ -1168,7 +1539,9 @@ object TbtSmcEngine {
         macroLabel: String,
         macro: SingleTfAnalysis?,
         dealingZoneLabel: String,
-        volumeProfile: VolumeProfileAnalysis
+        volumeProfile: VolumeProfileAnalysis,
+        hasHtfBullOverlap: Boolean,
+        hasHtfBearOverlap: Boolean
     ): TbtTradeSetup {
         val spot = candles.last().close
         if (!spot.isFinite() || spot <= 0.0) return TbtTradeSetup()
@@ -1181,6 +1554,13 @@ object TbtSmcEngine {
             .filter { it.type == TbtZoneType.SUPPLY && it.top >= spot }
             .minByOrNull { it.bottom }
 
+        val ltfBullFlip = ltf.breakerZones
+            .filter { it.type == TbtZoneType.BREAKER_BULL && it.bottom <= spot * 1.01 }
+            .maxByOrNull { it.top }
+        val ltfBearFlip = ltf.breakerZones
+            .filter { it.type == TbtZoneType.BREAKER_BEAR && it.top >= spot * 0.99 }
+            .minByOrNull { it.bottom }
+
         val htfDemandBelow = htf?.activeZones
             ?.filter { it.type == TbtZoneType.DEMAND && it.bottom <= spot }
             ?.maxByOrNull { it.top }
@@ -1189,12 +1569,32 @@ object TbtSmcEngine {
             ?.minByOrNull { it.bottom }
 
         val inLtfDemand = ltfDemandBelow != null && spot <= ltfDemandBelow.top + atr * 0.65 && spot >= ltfDemandBelow.bottom
+        val inBullFlip = ltfBullFlip != null && spot <= ltfBullFlip.top + atr * 0.7 && spot >= ltfBullFlip.bottom - atr * 0.2
         val inHtfDemand = htfDemandBelow != null && spot <= htfDemandBelow.top + atr * 1.1 && spot >= htfDemandBelow.bottom
         val inLtfSupply = ltfSupplyAbove != null && spot >= ltfSupplyAbove.bottom - atr * 0.65 && spot <= ltfSupplyAbove.top
+        val inBearFlip = ltfBearFlip != null && spot >= ltfBearFlip.bottom - atr * 0.7 && spot <= ltfBearFlip.top + atr * 0.2
         val inHtfSupply = htfSupplyAbove != null && spot >= htfSupplyAbove.bottom - atr * 1.1 && spot <= htfSupplyAbove.top
 
-        val recentBullConfirm = (ltf.candleCount - 1) - ltf.lastBullConfirmIdx <= 4
-        val recentBearConfirm = (ltf.candleCount - 1) - ltf.lastBearConfirmIdx <= 4
+        val lastIdx = ltf.candleCount - 1
+        val recentBullConfirm = lastIdx - ltf.lastBullConfirmIdx <= 5
+        val recentBearConfirm = lastIdx - ltf.lastBearConfirmIdx <= 5
+        val recentBullIdmSwept = lastIdx - ltf.lastBullIdmSweepIdx <= 8
+        val recentBearIdmSwept = lastIdx - ltf.lastBearIdmSweepIdx <= 8
+        val recentEqlTrap = lastIdx - ltf.lastEqlTrapIdx <= 8
+        val recentEqhTrap = lastIdx - ltf.lastEqhTrapIdx <= 8
+        val recentBullFlip = lastIdx - ltf.lastBullFlipIdx <= 8 || inBullFlip
+        val recentBearFlip = lastIdx - ltf.lastBearFlipIdx <= 8 || inBearFlip
+
+        val hasUnsweptBullIdm = ltf.activeBullIdmPrice != null &&
+            spot > ltf.activeBullIdmPrice &&
+            ltfDemandBelow != null &&
+            ltf.activeBullIdmPrice > ltfDemandBelow.top &&
+            !recentBullIdmSwept && !recentEqlTrap
+        val hasUnsweptBearIdm = ltf.activeBearIdmPrice != null &&
+            spot < ltf.activeBearIdmPrice &&
+            ltfSupplyAbove != null &&
+            ltf.activeBearIdmPrice < ltfSupplyAbove.bottom &&
+            !recentBearIdmSwept && !recentEqhTrap
 
         var bullScore = 0
         var bearScore = 0
@@ -1203,27 +1603,27 @@ object TbtSmcEngine {
 
         if (macro != null) {
             if (macro.bias == TbtMarketBias.BULLISH) {
-                bullScore += 25
+                bullScore += 20
                 bullReasons.add("$macroLabel Macro Bullish")
             } else if (macro.bias == TbtMarketBias.BEARISH) {
-                bearScore += 25
+                bearScore += 20
                 bearReasons.add("$macroLabel Macro Bearish")
             }
         }
         if (htf != null) {
             if (htf.bias == TbtMarketBias.BULLISH) {
-                bullScore += 30
+                bullScore += 25
                 bullReasons.add("$htfLabel HTF Bullish")
             } else if (htf.bias == TbtMarketBias.BEARISH) {
-                bearScore += 30
+                bearScore += 25
                 bearReasons.add("$htfLabel HTF Bearish")
             }
         }
         if (ltf.bias == TbtMarketBias.BULLISH) {
-            bullScore += 20
+            bullScore += 15
             bullReasons.add("LTF Structure Bullish")
         } else if (ltf.bias == TbtMarketBias.BEARISH) {
-            bearScore += 20
+            bearScore += 15
             bearReasons.add("LTF Structure Bearish")
         }
 
@@ -1235,6 +1635,23 @@ object TbtSmcEngine {
             bullScore += 15
             bullReasons.add("Inside $htfLabel HTF Demand")
         }
+        if (hasHtfBullOverlap) {
+            bullScore += 18
+            bullReasons.add("Overlapping HTF+LTF Demand POI")
+        }
+        if (recentBullIdmSwept) {
+            bullScore += 16
+            bullReasons.add("Inducement (IDM) Swept")
+        }
+        if (recentEqlTrap) {
+            bullScore += 16
+            bullReasons.add("EQL Trap Reversal")
+        }
+        if (recentBullFlip) {
+            bullScore += 14
+            bullReasons.add("Bullish S/D Breaker Flip")
+        }
+
         if (inLtfSupply) {
             bearScore += 15
             bearReasons.add("Inside LTF Supply POI")
@@ -1242,6 +1659,22 @@ object TbtSmcEngine {
         if (inHtfSupply) {
             bearScore += 15
             bearReasons.add("Inside $htfLabel HTF Supply")
+        }
+        if (hasHtfBearOverlap) {
+            bearScore += 18
+            bearReasons.add("Overlapping HTF+LTF Supply POI")
+        }
+        if (recentBearIdmSwept) {
+            bearScore += 16
+            bearReasons.add("Inducement (IDM) Swept")
+        }
+        if (recentEqhTrap) {
+            bearScore += 16
+            bearReasons.add("EQH Trap Reversal")
+        }
+        if (recentBearFlip) {
+            bearScore += 14
+            bearReasons.add("Bearish S/D Breaker Flip")
         }
 
         if (dealingZoneLabel == "Discount") {
@@ -1253,11 +1686,11 @@ object TbtSmcEngine {
         }
 
         if (recentBullConfirm) {
-            bullScore += 18
+            bullScore += 16
             bullReasons.add(ltf.lastSignal)
         }
         if (recentBearConfirm) {
-            bearScore += 18
+            bearScore += 16
             bearReasons.add(ltf.lastSignal)
         }
         if (ltf.activeBullPower != null) {
@@ -1269,38 +1702,55 @@ object TbtSmcEngine {
             bearReasons.add("Seller Power Active")
         }
 
-        val scoreDiff = abs(bullScore - bearScore)
-        val hasStructuralPoi = ltfDemandBelow != null || htfDemandBelow != null || ltf.activeBullPower != null ||
-            ltfSupplyAbove != null || htfSupplyAbove != null || ltf.activeBearPower != null
+        // Balanced MTF Confluence Filter: penalize un-swept inducement ahead of extreme POIs
+        if (hasUnsweptBullIdm) {
+            bullScore = (bullScore - 18).coerceAtLeast(0)
+        }
+        if (hasUnsweptBearIdm) {
+            bearScore = (bearScore - 18).coerceAtLeast(0)
+        }
 
-        if (!hasStructuralPoi || (max(bullScore, bearScore) < 35) ||
+        val scoreDiff = abs(bullScore - bearScore)
+        val hasStructuralPoi = ltfDemandBelow != null || htfDemandBelow != null || ltfBullFlip != null || ltf.activeBullPower != null ||
+            ltfSupplyAbove != null || htfSupplyAbove != null || ltfBearFlip != null || ltf.activeBearPower != null
+
+        val isBuyPreferred = bullScore >= bearScore
+        val winningScore = max(bullScore, bearScore)
+        val blockedByUnsweptIdm = (isBuyPreferred && hasUnsweptBullIdm && winningScore < 48) ||
+            (!isBuyPreferred && hasUnsweptBearIdm && winningScore < 48)
+
+        if (!hasStructuralPoi || winningScore < 38 || blockedByUnsweptIdm ||
             (scoreDiff < 15 && !recentBullConfirm && !recentBearConfirm)
         ) {
             return TbtTradeSetup(
                 direction = TbtTradeDirection.WAIT,
                 isConfirmedEntry = false,
-                confidencePercent = max(bullScore, bearScore).coerceIn(15, 55),
-                statusLabel = "Wait • Mixed MTF / Mid-Range",
+                confidencePercent = winningScore.coerceIn(15, 55),
+                statusLabel = if (blockedByUnsweptIdm) "Wait • Un-swept IDM Ahead" else "Wait • Mixed MTF / Mid-Range",
                 volumeRetraceEntry = volumeProfile.pocPrice,
                 volumeProfileReason = volumeProfile.pocSummary,
-                confluenceReasons = listOf("Wait for clean Demand/Supply tap or MTF alignment")
+                confluenceReasons = listOf(
+                    if (blockedByUnsweptIdm) "Inducement not swept yet — avoid early trap" else "Wait for clean Demand/Supply tap or MTF alignment"
+                )
             )
         }
 
-        val isBuy = bullScore >= bearScore
-        val rawConf = if (isBuy) bullScore else bearScore
-        val confidence = rawConf.coerceIn(45, 96)
+        val isBuy = isBuyPreferred
+        val rawConf = winningScore
+        val confidence = rawConf.coerceIn(45, 97)
         val minRisk = max(atr * 0.45, spot * 0.002)
         val slBuffer = max(atr * 0.25, spot * 0.0012)
 
         return if (isBuy) {
             val activeZone = when {
+                inBullFlip -> ltfBullFlip
                 inHtfDemand && inLtfDemand -> ltfDemandBelow
                 inLtfDemand -> ltfDemandBelow
                 inHtfDemand -> htfDemandBelow
-                else -> ltfDemandBelow ?: htfDemandBelow
+                else -> ltfDemandBelow ?: ltfBullFlip ?: htfDemandBelow
             }
-            val confirmed = recentBullConfirm || (inLtfDemand && ltf.activeBullPower != null) || (inHtfDemand && recentBullConfirm)
+            val confirmed = recentBullConfirm || recentEqlTrap || recentBullIdmSwept || inBullFlip ||
+                (inLtfDemand && ltf.activeBullPower != null)
             val entry = if (confirmed) {
                 spot
             } else {
@@ -1388,16 +1838,18 @@ object TbtSmcEngine {
                 slReason = slReason,
                 tp1Reason = tp1Reason,
                 tp2Reason = tp2Reason,
-                confluenceReasons = bullReasons.distinct().take(4)
+                confluenceReasons = bullReasons.distinct().take(6)
             )
         } else {
             val activeZone = when {
+                inBearFlip -> ltfBearFlip
                 inHtfSupply && inLtfSupply -> ltfSupplyAbove
                 inLtfSupply -> ltfSupplyAbove
                 inHtfSupply -> htfSupplyAbove
-                else -> ltfSupplyAbove ?: htfSupplyAbove
+                else -> ltfSupplyAbove ?: ltfBearFlip ?: htfSupplyAbove
             }
-            val confirmed = recentBearConfirm || (inLtfSupply && ltf.activeBearPower != null) || (inHtfSupply && recentBearConfirm)
+            val confirmed = recentBearConfirm || recentEqhTrap || recentBearIdmSwept || inBearFlip ||
+                (inLtfSupply && ltf.activeBearPower != null)
             val entry = if (confirmed) {
                 spot
             } else {
@@ -1487,7 +1939,7 @@ object TbtSmcEngine {
                 slReason = slReason,
                 tp1Reason = tp1Reason,
                 tp2Reason = tp2Reason,
-                confluenceReasons = bearReasons.distinct().take(4)
+                confluenceReasons = bearReasons.distinct().take(6)
             )
         }
     }

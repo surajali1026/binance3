@@ -218,7 +218,8 @@ data class ChartPreferencesEntity(
     val tbtShowHud: Boolean = true,
     val tbtShowTradeSetup: Boolean = true,
     val tbtUseMultiTimeframe: Boolean = true,
-    val tbtShowVolumeProfile: Boolean = true
+    val tbtShowVolumeProfile: Boolean = true,
+    val tbtShowLiquidityTraps: Boolean = true
 ) {
     fun toDomain(): ChartPreferences = ChartPreferences(
         lastSymbol = lastSymbol,
@@ -242,7 +243,8 @@ data class ChartPreferencesEntity(
         tbtShowHud = tbtShowHud,
         tbtShowTradeSetup = tbtShowTradeSetup,
         tbtUseMultiTimeframe = tbtUseMultiTimeframe,
-        tbtShowVolumeProfile = tbtShowVolumeProfile
+        tbtShowVolumeProfile = tbtShowVolumeProfile,
+        tbtShowLiquidityTraps = tbtShowLiquidityTraps
     )
 
     companion object {
@@ -269,7 +271,8 @@ data class ChartPreferencesEntity(
             tbtShowHud = prefs.tbtShowHud,
             tbtShowTradeSetup = prefs.tbtShowTradeSetup,
             tbtUseMultiTimeframe = prefs.tbtUseMultiTimeframe,
-            tbtShowVolumeProfile = prefs.tbtShowVolumeProfile
+            tbtShowVolumeProfile = prefs.tbtShowVolumeProfile,
+            tbtShowLiquidityTraps = prefs.tbtShowLiquidityTraps
         )
     }
 }

@@ -562,6 +562,7 @@ class ChartAndWatchlistUiTest {
         var tradeSetupToggled = 0
         var mtfToggled = 0
         var volumeProfileToggled = 0
+        var liquidityTrapsToggled = 0
         var alertPriceRequested: Double? = null
 
         val state = ChartUiState(
@@ -587,7 +588,8 @@ class ChartAndWatchlistUiTest {
                         onToggleTbtHud = { hudToggled++ },
                         onToggleTbtTradeSetup = { tradeSetupToggled++ },
                         onToggleTbtMtf = { mtfToggled++ },
-                        onToggleTbtVolumeProfile = { volumeProfileToggled++ }
+                        onToggleTbtVolumeProfile = { volumeProfileToggled++ },
+                        onToggleTbtLiquidityTraps = { liquidityTrapsToggled++ }
                     )
                     com.example.ui.chart.TbtConditionHudBadge(
                         summary = com.example.domain.indicator.TbtConditionSummary(
@@ -657,7 +659,7 @@ class ChartAndWatchlistUiTest {
         composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
         assertEquals(1, mainToggled)
 
-        // Settings popover opens and toggles all 8 layers including Volume Profile
+        // Settings popover opens and toggles all 9 layers including Volume Profile and Liquidity Traps & Breakers
         composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed().performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("tbt_smc_settings_menu").assertIsDisplayed()
@@ -667,6 +669,7 @@ class ChartAndWatchlistUiTest {
         composeTestRule.onNodeWithTag("tbt_layer_signals").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_trade_setup").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_volume_profile").performClick()
+        composeTestRule.onNodeWithTag("tbt_layer_liquidity_traps").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_mtf").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_hud").performClick()
         assertEquals(1, zonesToggled)
@@ -675,6 +678,7 @@ class ChartAndWatchlistUiTest {
         assertEquals(1, signalsToggled)
         assertEquals(1, tradeSetupToggled)
         assertEquals(1, volumeProfileToggled)
+        assertEquals(1, liquidityTrapsToggled)
         assertEquals(1, mtfToggled)
         assertEquals(1, hudToggled)
     }

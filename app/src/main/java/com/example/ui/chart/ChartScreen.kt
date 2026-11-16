@@ -168,6 +168,7 @@ fun ChartScreen(
                 onToggleTbtTradeSetup = viewModel::toggleTbtTradeSetup,
                 onToggleTbtMtf = viewModel::toggleTbtMultiTimeframe,
                 onToggleTbtVolumeProfile = viewModel::toggleTbtVolumeProfile,
+                onToggleTbtLiquidityTraps = viewModel::toggleTbtLiquidityTraps,
                 onExitFullScreen = {
                     if (state.isFullScreen) {
                         viewModel.toggleFullScreen()
@@ -205,7 +206,8 @@ fun ChartScreen(
                 onToggleTbtHud = viewModel::toggleTbtHud,
                 onToggleTbtTradeSetup = viewModel::toggleTbtTradeSetup,
                 onToggleTbtMtf = viewModel::toggleTbtMultiTimeframe,
-                onToggleTbtVolumeProfile = viewModel::toggleTbtVolumeProfile
+                onToggleTbtVolumeProfile = viewModel::toggleTbtVolumeProfile,
+                onToggleTbtLiquidityTraps = viewModel::toggleTbtLiquidityTraps
             )
         }
 

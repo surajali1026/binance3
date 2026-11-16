@@ -528,15 +528,20 @@ fun ChartCanvas(
                             for (idx in visibleRange) {
                                 timeToIndex[candles[idx].openTime] = idx
                             }
+                            val markerSideCounts = HashMap<Pair<Long, String>, Int>()
                             state.tbtSmc.markers.forEach { marker ->
                                 val idx = timeToIndex[marker.timeMillis] ?: return@forEach
                                 val c = candles[idx]
                                 val cx = mapper.indexToX(idx.toFloat())
                                 val isAbove = marker.position == "aboveBar"
+                                val sideKey = marker.timeMillis to marker.position
+                                val stackIndex = markerSideCounts.getOrDefault(sideKey, 0)
+                                markerSideCounts[sideKey] = stackIndex + 1
+                                val stackOffset = stackIndex * 22f
                                 val anchorY = if (isAbove) {
-                                    (mapper.priceToY(c.high) - 10f).coerceAtLeast(10f)
+                                    (mapper.priceToY(c.high) - 10f - stackOffset).coerceAtLeast(10f)
                                 } else {
-                                    (mapper.priceToY(c.low) + 10f).coerceAtMost(height - 10f)
+                                    (mapper.priceToY(c.low) + 10f + stackOffset).coerceAtMost(height - 10f)
                                 }
                                 val mColor = parseTbtColor(marker.colorHex)
                                 drawCircle(color = mColor, radius = 4.5f, center = Offset(cx, anchorY))
