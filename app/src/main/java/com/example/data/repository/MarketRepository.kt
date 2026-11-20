@@ -20,7 +20,9 @@ import com.example.domain.model.Timeframe
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -262,17 +264,21 @@ class MarketRepository(
         }
     }
 
-    private suspend fun loadFromFuturesApi(api: BinanceFuturesApi, mode: MarketEndpointMode) {
+    private suspend fun loadFromFuturesApi(api: BinanceFuturesApi, mode: MarketEndpointMode) = coroutineScope {
         val allowedStatuses = setOf("TRADING", "PENDING_TRADING", "PRE_TRADING")
-        val loadedContracts = api.getExchangeInfo().symbols
+        val exchangeInfoDeferred = async { api.getExchangeInfo() }
+        val tickersDeferred = async { api.getTickers24hr() }
+        val premiumDeferred = async {
+            runCatching { api.getAllPremiumIndex().associateBy { it.symbol } }.getOrDefault(emptyMap())
+        }
+
+        val loadedContracts = exchangeInfoDeferred.await().symbols
             .filter { it.status.uppercase() in allowedStatuses && (it.quoteAsset == "USDT" || it.quoteAsset == "USDC") }
             .map { it.toDomain() }
             .sortedBy { it.symbol }
 
-        val ticker24hrList = api.getTickers24hr()
-        val premiumMap = runCatching {
-            api.getAllPremiumIndex().associateBy { it.symbol }
-        }.getOrDefault(emptyMap())
+        val ticker24hrList = tickersDeferred.await()
+        val premiumMap = premiumDeferred.await()
 
         val tickerMap = HashMap<String, TickerSnapshot>(ticker24hrList.size)
         for (dto in ticker24hrList) {
@@ -465,6 +471,16 @@ class MarketRepository(
             val cacheKey = CandleCacheKey(symbol, priceSource, timeframe.id, resolvedMode)
             val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }
             synchronized(cache) {
+                if (endTime == null && parsedBase.isNotEmpty()) {
+                    val freshStart = parsedBase.first().openTime
+                    val existingLast = cache.values.lastOrNull()?.openTime
+                    // If existing cache is completely stale (disjoint gap behind fresh window), discard stale tail
+                    if (existingLast != null && existingLast < freshStart) {
+                        cache.clear()
+                    } else if (cache.size > 1500) {
+                        cache.clear()
+                    }
+                }
                 parsedBase.forEach { c -> cache[c.openTime] = c }
                 val allBase = cache.values.toList()
                 CandleAggregator.aggregate(allBase, timeframe, resolvedMode)
@@ -477,11 +493,12 @@ class MarketRepository(
         pair: String,
         priceSource: PriceSource,
         timeframe: Timeframe,
-        endTime: Long?
+        endTime: Long?,
+        limitOverride: Int? = null
     ): Pair<List<Candle>, MarketEndpointMode> {
         suspend fun queryFutures(api: BinanceFuturesApi, mode: MarketEndpointMode): List<Candle> {
             val (baseInterval, _) = CandleAggregator.pickBaseInterval(timeframe, mode)
-            val limit = CandleAggregator.recommendedFetchLimit(timeframe, endpointMode = mode)
+            val limit = limitOverride ?: CandleAggregator.recommendedFetchLimit(timeframe, endpointMode = mode)
             val body = when (priceSource) {
                 PriceSource.LAST -> api.getLastPriceKlines(symbol, baseInterval, limit, endTime = endTime)
                 PriceSource.MARK -> api.getMarkPriceKlines(symbol, baseInterval, limit, endTime = endTime)
@@ -495,7 +512,7 @@ class MarketRepository(
             val (baseInterval, _) = CandleAggregator.pickBaseInterval(timeframe, mode)
             val bybitInterval = BybitPayloadParser.toBybitInterval(baseInterval)
             val baseIntervalMs = BybitPayloadParser.fromBybitIntervalMs(bybitInterval)
-            val limit = CandleAggregator.recommendedFetchLimit(timeframe, endpointMode = mode).coerceIn(1, 1000)
+            val limit = (limitOverride ?: CandleAggregator.recommendedFetchLimit(timeframe, endpointMode = mode)).coerceIn(1, 1000)
             val body = when (priceSource) {
                 PriceSource.LAST -> bybitApi.getLastPriceKlines(
                     symbol = symbol,
@@ -527,7 +544,7 @@ class MarketRepository(
             }
             val mode = MarketEndpointMode.VISION_MIRROR
             val (baseInterval, _) = CandleAggregator.pickBaseInterval(timeframe, mode)
-            val limit = CandleAggregator.recommendedFetchLimit(timeframe, endpointMode = mode)
+            val limit = limitOverride ?: CandleAggregator.recommendedFetchLimit(timeframe, endpointMode = mode)
             val raw = visionApi.getKlines(symbol, baseInterval, limit, endTime = endTime).string()
             return BinancePayloadParser.parseKlineArray(raw)
         }
@@ -586,22 +603,6 @@ class MarketRepository(
         }
     }
 
-    suspend fun fetchSpotKlines(
-        symbol: String,
-        timeframe: Timeframe,
-        limit: Int = 180
-    ): List<Candle> = withContext(Dispatchers.IO) {
-        runCatching {
-            val mode = MarketEndpointMode.VISION_MIRROR
-            val (baseInterval, factor) = CandleAggregator.pickBaseInterval(timeframe, mode)
-            val baseLimit = (limit.toLong() * factor).coerceIn(30L, 500L).toInt()
-            val raw = visionApi.getKlines(symbol = symbol, interval = baseInterval, limit = baseLimit).string()
-            val parsed = BinancePayloadParser.parseKlineArray(raw)
-            if (parsed.isEmpty()) emptyList()
-            else CandleAggregator.aggregate(parsed, timeframe, mode)
-        }.getOrDefault(emptyList())
-    }
-
     fun getCachedCandles(
         symbol: String,
         priceSource: PriceSource,
@@ -612,6 +613,23 @@ class MarketRepository(
         return synchronized(cache) {
             CandleAggregator.aggregate(cache.values.toList(), timeframe, mode)
         }
+    }
+
+    /**
+     * Returns cached candles only if the latest candle is still within 1.5 bars of current exchange time,
+     * preventing stale previous candles from flashing when returning to a timeframe like 15m.
+     */
+    fun getFreshCachedCandles(
+        symbol: String,
+        priceSource: PriceSource,
+        timeframe: Timeframe
+    ): List<Candle> {
+        val cached = getCachedCandles(symbol, priceSource, timeframe)
+        if (cached.size < 20) return emptyList()
+        val latest = cached.last()
+        val nowMs = currentExchangeTimeMillis()
+        val maxStaleAgeMs = max(timeframe.durationMillis * 2L, 90_000L)
+        return if (nowMs - latest.closeTime <= maxStaleAgeMs) cached else emptyList()
     }
 
     fun observeLiveKlineUpdates(
@@ -792,7 +810,8 @@ class MarketRepository(
                             pair = pair,
                             priceSource = priceSource,
                             timeframe = timeframe,
-                            endTime = null
+                            endTime = null,
+                            limitOverride = 12
                         )
                         if (parsed.isNotEmpty() && resolvedMode == mode) {
                             val cache = baseCandleCache.getOrPut(cacheKey) { LinkedHashMap() }

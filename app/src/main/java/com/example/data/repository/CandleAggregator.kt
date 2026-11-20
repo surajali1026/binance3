@@ -36,13 +36,13 @@ object CandleAggregator {
 
     fun recommendedFetchLimit(
         timeframe: Timeframe,
-        desiredBars: Int = 350,
+        desiredBars: Int = 200,
         endpointMode: MarketEndpointMode = MarketEndpointMode.FUTURES_PROD
     ): Int {
         if (isNativeSupported(timeframe, endpointMode)) return desiredBars.coerceIn(100, 1000)
         val (_, baseMs) = pickBaseInterval(timeframe, endpointMode)
         val ratio = (timeframe.durationMillis / baseMs).coerceAtLeast(1L).toInt()
-        return (desiredBars * ratio).coerceIn(300, 1000)
+        return (desiredBars * ratio).coerceIn(200, 1000)
     }
 
     fun aggregate(

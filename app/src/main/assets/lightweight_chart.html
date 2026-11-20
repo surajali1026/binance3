@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://unpkg.com" crossorigin>
 <style>
 html,body{
     margin:0;
@@ -134,6 +136,10 @@ body.immersive-landscape{
 
     window.setMarketData = function(payload){
         queuedMarketData = payload;
+        queuedDeltas = [];
+    };
+    window.clearChartSeries = function(){
+        queuedMarketData = null;
         queuedDeltas = [];
     };
     window.updateLastCandle = function(payload){
@@ -302,9 +308,13 @@ body.immersive-landscape{
         let tbtMarkersPlugin = null;
         let hasInitialData = false;
         let lastCandleTime = null;
+        let lastFirstCandleTime = null;
         let lastCandleCount = 0;
         let barTimes = [];
         let barIntervalSec = 60;
+        let prevBarIntervalSec = 0;
+        let lastChartW = initW;
+        let lastChartH = initH;
 
         let previousSeriesKey = null;
         let previousSymbol = null;
@@ -466,17 +476,23 @@ body.immersive-landscape{
             const w = el.clientWidth;
             const h = el.clientHeight;
             if(w > 0 && h > 0){
-                chart.resize(w, h);
+                if(w !== lastChartW || h !== lastChartH){
+                    chart.resize(w, h);
+                    lastChartW = w;
+                    lastChartH = h;
+                }
                 hasValidSize = true;
             }
 
             refreshBarTimes(clean);
             applyPricePrecision(clean[clean.length - 1].close);
             const seriesChanged = seriesKey != null && seriesKey !== previousSeriesKey;
+            const intervalChanged = prevBarIntervalSec > 0 && barIntervalSec !== prevBarIntervalSec;
+            const firstTimeShiftedForward = lastFirstCandleTime != null && clean[0].time > lastFirstCandleTime;
             const nextSymbol = seriesKey != null ? String(seriesKey).split('_')[0] : null;
             const symbolChanged = nextSymbol != null && previousSymbol != null && nextSymbol !== previousSymbol;
 
-            if (!hasInitialData || seriesChanged) {
+            if (!hasInitialData || seriesChanged || intervalChanged || firstTimeShiftedForward) {
                 let preservedSpan = null;
                 if (hasInitialData && seriesChanged && !symbolChanged) {
                     const currentRange = chart.timeScale().getVisibleLogicalRange();
@@ -516,11 +532,33 @@ body.immersive-landscape{
             }
 
             const lastBar = clean[clean.length - 1];
+            lastFirstCandleTime = clean[0].time;
             lastCandleTime = lastBar.time;
             lastCandleCount = clean.length;
+            prevBarIntervalSec = barIntervalSec;
             lastKnownClose = lastBar.close;
             lastKnownBull = lastBar.close >= lastBar.open;
         }
+
+        window.clearChartSeries = function(){
+            try{
+                candles.setData([]);
+                volume.setData([]);
+                clearTbtPriceLines();
+                setTbtMarkersCompat([]);
+                hasInitialData = false;
+                previousSeriesKey = null;
+                lastCandleTime = null;
+                lastFirstCandleTime = null;
+                lastCandleCount = 0;
+                barTimes = [];
+                prevBarIntervalSec = 0;
+                previousTbtSig = '';
+                countdownEl.style.display = 'none';
+                plusHandleEl.style.display = 'none';
+                schedulePaintDrawings();
+            }catch(_){}
+        };
 
         function updateQuickGuideLine(){
             const guidePrice = draggingQuickAlertPrice != null ? draggingQuickAlertPrice : pinnedQuickAlertPrice;
@@ -1479,7 +1517,11 @@ body.immersive-landscape{
             if(w > 0 && h > 0){
                 const wasZero = !hasValidSize;
                 hasValidSize = true;
-                chart.resize(w, h);
+                if(w !== lastChartW || h !== lastChartH){
+                    chart.resize(w, h);
+                    lastChartW = w;
+                    lastChartH = h;
+                }
                 if(wasZero && hasInitialData){
                     applyTradingViewRange(lastCandleCount, null);
                 }
@@ -1570,7 +1612,7 @@ body.immersive-landscape{
             s.onload = null;
             s.onerror = null;
             loadNextCdn();
-        }, 4500);
+        }, 2500);
         s.src = cdnUrls[cdnIdx++];
         s.async = true;
         s.onload = function(){

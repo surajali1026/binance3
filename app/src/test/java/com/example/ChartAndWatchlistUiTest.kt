@@ -559,10 +559,6 @@ class ChartAndWatchlistUiTest {
         var overlapToggled = 0
         var signalsToggled = 0
         var hudToggled = 0
-        var tradeSetupToggled = 0
-        var mtfToggled = 0
-        var volumeProfileToggled = 0
-        var alertPriceRequested: Double? = null
 
         val state = ChartUiState(
             symbol = "BTCUSDT",
@@ -584,80 +580,33 @@ class ChartAndWatchlistUiTest {
                         onToggleTbtPowerShift = { powerToggled++ },
                         onToggleTbtOverlap = { overlapToggled++ },
                         onToggleTbtSignals = { signalsToggled++ },
-                        onToggleTbtHud = { hudToggled++ },
-                        onToggleTbtTradeSetup = { tradeSetupToggled++ },
-                        onToggleTbtMtf = { mtfToggled++ },
-                        onToggleTbtVolumeProfile = { volumeProfileToggled++ }
+                        onToggleTbtHud = { hudToggled++ }
                     )
                     com.example.ui.chart.TbtConditionHudBadge(
                         summary = com.example.domain.indicator.TbtConditionSummary(
                             bias = com.example.domain.indicator.TbtMarketBias.BULLISH,
                             activeBullPower = 91250.5,
                             activeBearPower = null,
-                            lastSignal = "3CR BUY Confirmed",
-                            mtfBiases = listOf(
-                                com.example.domain.indicator.TbtTimeframeBiasInfo("15m", "LTF", com.example.domain.indicator.TbtMarketBias.BULLISH, "3CR BUY"),
-                                com.example.domain.indicator.TbtTimeframeBiasInfo("1H", "HTF", com.example.domain.indicator.TbtMarketBias.BULLISH, "3CR"),
-                                com.example.domain.indicator.TbtTimeframeBiasInfo("4H", "Macro", com.example.domain.indicator.TbtMarketBias.BULLISH, "Bullish")
-                            ),
-                            mtfAlignmentLabel = "Full Bullish MTF (3/3)",
-                            dealingZoneLabel = "Discount",
-                            volumePocPrice = 91280.0,
-                            volumeImbalanceLabel = "Futures+Spot 2.4x Vol • Bull Imbalance",
-                            volumeSourcesLabel = "Futures+Spot",
-                            tradeSetup = com.example.domain.indicator.TbtTradeSetup(
-                                direction = com.example.domain.indicator.TbtTradeDirection.BUY,
-                                isConfirmedEntry = true,
-                                confidencePercent = 88,
-                                statusLabel = "BUY NOW • MTF Confirmed",
-                                entryPrice = 91500.0,
-                                entryZoneLow = 91200.0,
-                                entryZoneHigh = 91550.0,
-                                stopLoss = 91000.0,
-                                takeProfit1 = 92500.0,
-                                takeProfit2 = 93500.0,
-                                riskReward1 = 2.0,
-                                riskReward2 = 4.0,
-                                volumeRetraceEntry = 91280.0,
-                                volumeProfileReason = "2.4x Bull HVN Retrace",
-                                slReason = "Below Buyer Power + Buf",
-                                tp1Reason = "LTF Supply POI",
-                                tp2Reason = "1H HTF Supply",
-                                confluenceReasons = listOf("4H Macro Bullish", "1H HTF Bullish")
-                            )
+                            lastSignal = "3CR BUY Confirmed"
                         ),
-                        precision = 2,
-                        showTradeSetup = true,
-                        showVolumeProfile = true,
-                        onQuickCreateAlert = { price -> alertPriceRequested = price }
+                        precision = 2
                     )
                 }
             }
         }
         composeTestRule.waitForIdle()
 
-        // Floating HUD displays bias, MTF biases, Entry/SL/Volume Profile Retrace, power level, and last signal
+        // Floating HUD displays bias, active power level, and last signal
         composeTestRule.onNodeWithTag("tbt_condition_hud").assertIsDisplayed()
         composeTestRule.onNodeWithText("BULLISH").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("tbt_trade_setup_levels", useUnmergedTree = true).assertIsDisplayed()
-        composeTestRule.onNodeWithText("EN 91,500.00").assertIsDisplayed()
-        composeTestRule.onNodeWithText("SL 91,000.00").assertIsDisplayed()
-        composeTestRule.onNodeWithText("VOL 91,280.00").assertIsDisplayed()
         composeTestRule.onNodeWithText("Bull Pwr: 91,250.50").assertIsDisplayed()
         composeTestRule.onNodeWithText("3CR BUY Confirmed").assertIsDisplayed()
-
-        // Clicking HUD expands MTF + Volume Profile details & 1-tap Alert VOL shortcut
-        composeTestRule.onNodeWithTag("tbt_condition_hud").performClick()
-        composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithTag("tbt_hud_expanded_details", useUnmergedTree = true).assertIsDisplayed()
-        composeTestRule.onNodeWithText("Alert VOL").assertIsDisplayed().performClick()
-        assertEquals(91280.0, alertPriceRequested!!, 0.001)
 
         // 1-click toggle works
         composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
         assertEquals(1, mainToggled)
 
-        // Settings popover opens and toggles all 8 layers including Volume Profile
+        // Settings popover opens and toggles all 5 original layers
         composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed().performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("tbt_smc_settings_menu").assertIsDisplayed()
@@ -665,17 +614,11 @@ class ChartAndWatchlistUiTest {
         composeTestRule.onNodeWithTag("tbt_layer_power_shift").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_overlap").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_signals").performClick()
-        composeTestRule.onNodeWithTag("tbt_layer_trade_setup").performClick()
-        composeTestRule.onNodeWithTag("tbt_layer_volume_profile").performClick()
-        composeTestRule.onNodeWithTag("tbt_layer_mtf").performClick()
         composeTestRule.onNodeWithTag("tbt_layer_hud").performClick()
         assertEquals(1, zonesToggled)
         assertEquals(1, powerToggled)
         assertEquals(1, overlapToggled)
         assertEquals(1, signalsToggled)
-        assertEquals(1, tradeSetupToggled)
-        assertEquals(1, volumeProfileToggled)
-        assertEquals(1, mtfToggled)
         assertEquals(1, hudToggled)
     }
 

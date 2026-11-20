@@ -165,9 +165,6 @@ fun ChartScreen(
                 onToggleTbtOverlap = viewModel::toggleTbtOverlap,
                 onToggleTbtSignals = viewModel::toggleTbtSignals,
                 onToggleTbtHud = viewModel::toggleTbtHud,
-                onToggleTbtTradeSetup = viewModel::toggleTbtTradeSetup,
-                onToggleTbtMtf = viewModel::toggleTbtMultiTimeframe,
-                onToggleTbtVolumeProfile = viewModel::toggleTbtVolumeProfile,
                 onExitFullScreen = {
                     if (state.isFullScreen) {
                         viewModel.toggleFullScreen()
@@ -202,10 +199,7 @@ fun ChartScreen(
                 onToggleTbtPowerShift = viewModel::toggleTbtPowerShift,
                 onToggleTbtOverlap = viewModel::toggleTbtOverlap,
                 onToggleTbtSignals = viewModel::toggleTbtSignals,
-                onToggleTbtHud = viewModel::toggleTbtHud,
-                onToggleTbtTradeSetup = viewModel::toggleTbtTradeSetup,
-                onToggleTbtMtf = viewModel::toggleTbtMultiTimeframe,
-                onToggleTbtVolumeProfile = viewModel::toggleTbtVolumeProfile
+                onToggleTbtHud = viewModel::toggleTbtHud
             )
         }
 
@@ -277,9 +271,6 @@ fun ChartScreen(
                 TbtConditionHudBadge(
                     summary = state.tbtSmc.summary,
                     precision = state.contract?.pricePrecision ?: 2,
-                    showTradeSetup = state.preferences.tbtShowTradeSetup,
-                    showVolumeProfile = state.preferences.tbtShowVolumeProfile,
-                    onQuickCreateAlert = { price -> requestCreateAlert(price) },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = hudTopOffset, end = 74.dp)

@@ -215,10 +215,7 @@ data class ChartPreferencesEntity(
     val tbtShowPowerShift: Boolean = true,
     val tbtShowOverlap: Boolean = true,
     val tbtShowSignals: Boolean = true,
-    val tbtShowHud: Boolean = true,
-    val tbtShowTradeSetup: Boolean = true,
-    val tbtUseMultiTimeframe: Boolean = true,
-    val tbtShowVolumeProfile: Boolean = true
+    val tbtShowHud: Boolean = true
 ) {
     fun toDomain(): ChartPreferences = ChartPreferences(
         lastSymbol = lastSymbol,
@@ -239,10 +236,7 @@ data class ChartPreferencesEntity(
         tbtShowPowerShift = tbtShowPowerShift,
         tbtShowOverlap = tbtShowOverlap,
         tbtShowSignals = tbtShowSignals,
-        tbtShowHud = tbtShowHud,
-        tbtShowTradeSetup = tbtShowTradeSetup,
-        tbtUseMultiTimeframe = tbtUseMultiTimeframe,
-        tbtShowVolumeProfile = tbtShowVolumeProfile
+        tbtShowHud = tbtShowHud
     )
 
     companion object {
@@ -266,10 +260,7 @@ data class ChartPreferencesEntity(
             tbtShowPowerShift = prefs.tbtShowPowerShift,
             tbtShowOverlap = prefs.tbtShowOverlap,
             tbtShowSignals = prefs.tbtShowSignals,
-            tbtShowHud = prefs.tbtShowHud,
-            tbtShowTradeSetup = prefs.tbtShowTradeSetup,
-            tbtUseMultiTimeframe = prefs.tbtUseMultiTimeframe,
-            tbtShowVolumeProfile = prefs.tbtShowVolumeProfile
+            tbtShowHud = prefs.tbtShowHud
         )
     }
 }

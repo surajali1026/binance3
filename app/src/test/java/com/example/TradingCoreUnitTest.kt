@@ -540,8 +540,8 @@ class TradingCoreUnitTest {
         candles.add(bar(21, 101.5, 102.0, 100.5, 100.6))
         candles.add(bar(22, 100.6, 101.5, 100.1, 101.2))
         candles.add(bar(23, 101.3, 105.5, 101.3, 105.0))
-        candles.add(bar(24, 105.0, 108.0, 104.8, 107.8))
-        candles.add(bar(25, 107.8, 110.0, 107.5, 109.5))
+        candles.add(bar(24, 104.8, 107.5, 101.4, 107.0))
+        candles.add(bar(25, 107.0, 109.5, 105.2, 109.2))
 
         val fullOut = com.example.domain.indicator.TbtSmcEngine.calculate(candles)
         assertTrue(fullOut.zones.any { it.type == com.example.domain.indicator.TbtZoneType.DEMAND && it.tapped })
@@ -552,7 +552,7 @@ class TradingCoreUnitTest {
         assertTrue(fullOut.markers.none { it.text == "BOS" || it.text == "CHoCH" })
         assertEquals(com.example.domain.indicator.TbtMarketBias.BULLISH, fullOut.summary.bias)
 
-        // 3. Respects layer toggles (zones, signals, and trade setup hidden)
+        // 3. Respects all 5 original layer toggles
         val filteredOut = com.example.domain.indicator.TbtSmcEngine.calculate(
             candles,
             com.example.domain.indicator.TbtSmcConfig(
@@ -560,236 +560,18 @@ class TradingCoreUnitTest {
                 showPowerShift = false,
                 showOverlap = false,
                 showSignals = false,
-                showTradeSetup = false,
-                showVolumeProfile = false
+                showHud = false
             )
         )
         assertTrue(filteredOut.priceLines.isEmpty())
         assertTrue(filteredOut.markers.isEmpty())
-    }
 
-    @Test
-    fun `tbt mtf timeframe resolver selects appropriate htf and macro tiers`() {
-        val m5 = Timeframe.DEFAULTS.first { it.id == "5m" }
+        // 4. Enforces single marker per candle timestamp (sorted ascending)
+        val markerTimes = fullOut.markers.map { it.timeMillis }
+        assertEquals(markerTimes.distinct().sorted(), markerTimes)
+
+        // 5. Default recommended fetch limit is tuned for fast initial chart loading
         val m15 = Timeframe.DEFAULTS.first { it.id == "15m" }
-        val h1 = Timeframe.DEFAULTS.first { it.id == "1H" }
-        val h4 = Timeframe.DEFAULTS.first { it.id == "4H" }
-
-        val p5 = com.example.domain.indicator.TbtMtfTimeframeResolver.resolve(m5, Timeframe.DEFAULTS)
-        assertNotNull(p5)
-        assertEquals("1H", p5!!.htf.id)
-        assertEquals("4H", p5.macro.id)
-
-        val p15 = com.example.domain.indicator.TbtMtfTimeframeResolver.resolve(m15, Timeframe.DEFAULTS)
-        assertNotNull(p15)
-        assertEquals("1H", p15!!.htf.id)
-        assertEquals("4H", p15.macro.id)
-
-        val p1h = com.example.domain.indicator.TbtMtfTimeframeResolver.resolve(h1, Timeframe.DEFAULTS)
-        assertNotNull(p1h)
-        assertEquals("4H", p1h!!.htf.id)
-        assertEquals("1D", p1h.macro.id)
-
-        val p4h = com.example.domain.indicator.TbtMtfTimeframeResolver.resolve(h4, Timeframe.DEFAULTS)
-        assertNotNull(p4h)
-        assertEquals("1D", p4h!!.htf.id)
-        assertEquals("1W", p4h.macro.id)
-
-        val custom = Timeframe(id = "9m", label = "9m", durationMillis = 9L * Timeframe.MINUTE_MS, nativeInterval = null, isCustom = true)
-        val pCustom = com.example.domain.indicator.TbtMtfTimeframeResolver.resolve(custom, Timeframe.DEFAULTS)
-        assertNotNull(pCustom)
-        assertEquals("1H", pCustom!!.htf.id)
-        assertEquals("4H", pCustom.macro.id)
-    }
-
-    @Test
-    fun `tbt smc mtf buy and sell setups compute entry sl tp1 tp2 with valid structural bounds and rr`() {
-        val baseTime = 1_750_000_000_000L
-
-        fun seq(count: Int, stepMs: Long, startPrice: Double, delta: Double): List<Candle> {
-            return (0 until count).map { i ->
-                val o = startPrice + i * delta
-                val c = o + delta * 0.9
-                val h = maxOf(o, c) + kotlin.math.abs(delta) * 0.6 + 0.5
-                val l = minOf(o, c) - kotlin.math.abs(delta) * 0.6 - 0.5
-                Candle(
-                    openTime = baseTime + i * stepMs,
-                    closeTime = baseTime + i * stepMs + stepMs - 1L,
-                    open = o,
-                    high = h,
-                    low = l,
-                    close = c,
-                    volume = 1000.0,
-                    isClosed = true
-                )
-            }
-        }
-
-        // Bullish MTF alignment: steady uptrend on 1H & 4H + LTF DBR demand + tap + 3CR BUY
-        val ltfStep = 900_000L
-        val ltfBull = mutableListOf<Candle>()
-        fun bar(idx: Int, o: Double, h: Double, l: Double, c: Double) = Candle(
-            openTime = baseTime + idx * ltfStep,
-            closeTime = baseTime + idx * ltfStep + ltfStep - 1L,
-            open = o,
-            high = h,
-            low = l,
-            close = c,
-            volume = 1000.0,
-            isClosed = true
-        )
-        for (i in 0..15) {
-            val c = if (i % 2 == 0) 100.6 else 99.4
-            ltfBull.add(bar(i, 100.0, 101.0, 99.0, c))
-        }
-        ltfBull.add(bar(16, 100.0, 100.2, 99.5, 99.8))
-        ltfBull.add(bar(17, 100.1, 104.3, 100.1, 104.3))
-        ltfBull.add(bar(18, 104.0, 104.4, 103.0, 103.5))
-        ltfBull.add(bar(19, 103.5, 103.8, 102.0, 102.2))
-        ltfBull.add(bar(20, 102.0, 102.2, 99.6, 101.0))
-        ltfBull.add(bar(21, 101.5, 102.0, 100.5, 100.6))
-        ltfBull.add(bar(22, 100.6, 101.5, 100.1, 101.2))
-        ltfBull.add(bar(23, 101.3, 105.5, 101.3, 105.0))
-        ltfBull.add(bar(24, 105.0, 108.0, 104.8, 107.8))
-        ltfBull.add(bar(25, 107.8, 110.0, 107.5, 109.5))
-
-        val htfBull = seq(32, 3_600_000L, 90.0, 0.7)
-        val macroBull = seq(32, 14_400_000L, 80.0, 1.0)
-
-        val buyOut = com.example.domain.indicator.TbtSmcEngine.calculate(
-            candles = ltfBull,
-            config = com.example.domain.indicator.TbtSmcConfig(showTradeSetup = true, useMultiTimeframe = true),
-            mtfInput = com.example.domain.indicator.TbtMtfInput(
-                currentTfLabel = "15m",
-                htfLabel = "1H",
-                htfCandles = htfBull,
-                macroLabel = "4H",
-                macroCandles = macroBull
-            )
-        )
-
-        val buySetup = buyOut.summary.tradeSetup
-        assertEquals(com.example.domain.indicator.TbtTradeDirection.BUY, buySetup.direction)
-        assertTrue(buySetup.stopLoss < buySetup.entryPrice)
-        assertTrue(buySetup.entryPrice < buySetup.takeProfit1)
-        assertTrue(buySetup.takeProfit1 < buySetup.takeProfit2)
-        assertTrue(buySetup.riskReward1 >= 1.5)
-        assertTrue(buySetup.riskReward2 > buySetup.riskReward1)
-        assertEquals(3, buyOut.summary.mtfBiases.size)
-        assertTrue(buyOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_ENTRY })
-        assertTrue(buyOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_SL })
-        assertTrue(buyOut.priceLines.none { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_TP })
-        assertTrue(buyOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.VOLUME_PROFILE })
-        assertTrue(buyOut.markers.none { it.text == "BOS" || it.text == "CHoCH" })
-
-        // Bearish MTF alignment: steady downtrend on 1H & 4H + LTF RBD supply + tap + drop
-        val ltfBear = mutableListOf<Candle>()
-        for (i in 0..15) {
-            val c = if (i % 2 == 0) 199.4 else 200.6
-            ltfBear.add(bar(i, 200.0, 201.0, 199.0, c))
-        }
-        // Small bullish base then strong bearish drop -> Supply zone
-        ltfBear.add(bar(16, 200.0, 200.5, 199.8, 200.2))
-        ltfBear.add(bar(17, 200.0, 200.1, 195.2, 195.5))
-        ltfBear.add(bar(18, 195.6, 197.0, 195.0, 196.4))
-        ltfBear.add(bar(19, 196.4, 198.2, 196.0, 197.8))
-        // Tap supply (high 200.3 >= 200.0, close 198.8 < 200.5)
-        ltfBear.add(bar(20, 197.8, 200.3, 197.5, 198.8))
-        // Bearish 3CR
-        ltfBear.add(bar(21, 198.5, 199.5, 198.0, 199.4))
-        ltfBear.add(bar(22, 199.4, 199.9, 198.5, 198.8))
-        ltfBear.add(bar(23, 198.7, 198.8, 194.2, 194.5))
-        ltfBear.add(bar(24, 194.5, 194.8, 191.8, 192.0))
-        ltfBear.add(bar(25, 192.0, 192.4, 189.5, 190.2))
-
-        val htfBear = seq(32, 3_600_000L, 230.0, -0.8)
-        val macroBear = seq(32, 14_400_000L, 250.0, -1.0)
-
-        val sellOut = com.example.domain.indicator.TbtSmcEngine.calculate(
-            candles = ltfBear,
-            config = com.example.domain.indicator.TbtSmcConfig(showTradeSetup = true, useMultiTimeframe = true),
-            mtfInput = com.example.domain.indicator.TbtMtfInput(
-                currentTfLabel = "15m",
-                htfLabel = "1H",
-                htfCandles = htfBear,
-                macroLabel = "4H",
-                macroCandles = macroBear
-            )
-        )
-
-        val sellSetup = sellOut.summary.tradeSetup
-        assertEquals(com.example.domain.indicator.TbtTradeDirection.SELL, sellSetup.direction)
-        assertTrue(sellSetup.stopLoss > sellSetup.entryPrice)
-        assertTrue(sellSetup.entryPrice > sellSetup.takeProfit1)
-        assertTrue(sellSetup.takeProfit1 > sellSetup.takeProfit2)
-        assertTrue(sellSetup.takeProfit2 > 0.0)
-        assertTrue(sellSetup.riskReward1 >= 1.5)
-    }
-
-    @Test
-    fun `tbt smc binance futures and spot volume profile identifies retracement entry and respects toggle`() {
-        val baseTime = 1_750_000_000_000L
-        val ltfStep = 900_000L
-        fun bar(idx: Int, o: Double, h: Double, l: Double, c: Double, vol: Double) = Candle(
-            openTime = baseTime + idx * ltfStep,
-            closeTime = baseTime + idx * ltfStep + ltfStep - 1L,
-            open = o,
-            high = h,
-            low = l,
-            close = c,
-            volume = vol,
-            isClosed = true
-        )
-
-        val ltf = mutableListOf<Candle>()
-        val spot = mutableListOf<Candle>()
-        for (i in 0..15) {
-            val c = if (i % 2 == 0) 100.6 else 99.4
-            ltf.add(bar(i, 100.0, 101.0, 99.0, c, 500.0))
-            spot.add(bar(i, 100.0, 101.0, 99.0, c, 450.0))
-        }
-        // DBR Demand base + tap with massive institutional volume concentrated near 101.0 - 102.0
-        ltf.add(bar(16, 100.0, 100.2, 99.5, 99.8, 1200.0))
-        ltf.add(bar(17, 100.1, 104.3, 100.1, 104.3, 4500.0))
-        ltf.add(bar(18, 104.0, 104.4, 103.0, 103.5, 800.0))
-        ltf.add(bar(19, 103.5, 103.8, 102.0, 102.2, 900.0))
-        // High-volume retracement & demand tap cluster around 101.2
-        ltf.add(bar(20, 102.0, 102.2, 99.6, 101.0, 18000.0))
-        spot.add(bar(16, 100.0, 100.2, 99.5, 99.8, 1000.0))
-        spot.add(bar(17, 100.1, 104.3, 100.1, 104.3, 4200.0))
-        spot.add(bar(18, 104.0, 104.4, 103.0, 103.5, 700.0))
-        spot.add(bar(19, 103.5, 103.8, 102.0, 102.2, 850.0))
-        spot.add(bar(20, 102.0, 102.2, 99.6, 101.0, 22000.0))
-
-        ltf.add(bar(21, 101.5, 102.0, 100.5, 100.6, 12000.0))
-        ltf.add(bar(22, 100.6, 101.5, 100.1, 101.2, 14000.0))
-        ltf.add(bar(23, 101.3, 105.5, 101.3, 105.0, 9000.0))
-        ltf.add(bar(24, 105.0, 108.0, 104.8, 107.8, 1500.0))
-        ltf.add(bar(25, 107.8, 110.0, 107.5, 109.5, 1400.0))
-
-        spot.add(bar(21, 101.5, 102.0, 100.5, 100.6, 10000.0))
-        spot.add(bar(22, 100.6, 101.5, 100.1, 101.2, 11000.0))
-        spot.add(bar(23, 101.3, 105.5, 101.3, 105.0, 7000.0))
-        spot.add(bar(24, 105.0, 108.0, 104.8, 107.8, 1300.0))
-        spot.add(bar(25, 107.8, 110.0, 107.5, 109.5, 1200.0))
-
-        val withVp = com.example.domain.indicator.TbtSmcEngine.calculate(
-            candles = ltf,
-            config = com.example.domain.indicator.TbtSmcConfig(showVolumeProfile = true),
-            mtfInput = com.example.domain.indicator.TbtMtfInput(spotCandles = spot)
-        )
-        assertEquals("Futures+Spot", withVp.summary.volumeSourcesLabel)
-        val retrace = withVp.summary.tradeSetup.volumeRetraceEntry
-        assertNotNull(retrace)
-        assertTrue(retrace!! >= withVp.summary.tradeSetup.stopLoss)
-        assertTrue(retrace <= ltf.last().close)
-        assertTrue(withVp.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.VOLUME_PROFILE })
-
-        val hiddenVp = com.example.domain.indicator.TbtSmcEngine.calculate(
-            candles = ltf,
-            config = com.example.domain.indicator.TbtSmcConfig(showVolumeProfile = false),
-            mtfInput = com.example.domain.indicator.TbtMtfInput(spotCandles = spot)
-        )
-        assertTrue(hiddenVp.priceLines.none { it.category == com.example.domain.indicator.TbtPriceLineCategory.VOLUME_PROFILE })
+        assertEquals(200, CandleAggregator.recommendedFetchLimit(m15))
     }
 }

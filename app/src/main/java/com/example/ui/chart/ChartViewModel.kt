@@ -27,15 +27,11 @@ import com.example.domain.model.PriceRangeMeasurement
 import com.example.domain.model.PriceSource
 import com.example.domain.model.TickerSnapshot
 import com.example.domain.model.Timeframe
-import com.example.domain.indicator.TbtMtfInput
-import com.example.domain.indicator.TbtMtfTimeframeResolver
 import com.example.domain.indicator.TbtSmcEngine
 import com.example.domain.indicator.TbtSmcOutput
 import com.example.domain.model.WatchlistItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -75,6 +71,10 @@ sealed interface ChartWebUpdate {
         val totalCount: Int
     ) : ChartWebUpdate
 
+    data class ClearSeries(
+        val seriesKey: String
+    ) : ChartWebUpdate
+
     data object ResetScroll : ChartWebUpdate
 
     data object ResetPriceScale : ChartWebUpdate
@@ -96,6 +96,7 @@ data class ChartUiState(
     val allTimeframes: List<Timeframe> = Timeframe.DEFAULTS,
     val favoriteTimeframes: List<Timeframe> = Timeframe.DEFAULTS.filter { it.isFavorite },
     val candles: List<Candle> = emptyList(),
+    val candlesSeriesKey: String = "",
     val isLoadingHistory: Boolean = true,
     val isPaginatingBack: Boolean = false,
     val errorMessage: String? = null,
@@ -147,11 +148,16 @@ class ChartViewModel(
     private val chartStateRepository: ChartStateRepository
 ) : ViewModel() {
 
+    private data class CandleSeriesData(
+        val seriesKey: String = "",
+        val candles: List<Candle> = emptyList()
+    )
+
     private val _symbol = MutableStateFlow("BTCUSDT")
     val symbolState: StateFlow<String> = _symbol.asStateFlow()
     private val _priceSource = MutableStateFlow(PriceSource.LAST)
     private val _timeframeId = MutableStateFlow("15m")
-    private val _candles = MutableStateFlow<List<Candle>>(emptyList())
+    private val _candleSeries = MutableStateFlow(CandleSeriesData())
     private val _isLoadingHistory = MutableStateFlow(true)
     private val _isPaginatingBack = MutableStateFlow(false)
     private val _errorMessage = MutableStateFlow<String?>(null)
@@ -173,19 +179,9 @@ class ChartViewModel(
     val navigationContextSymbolsState: StateFlow<List<String>> = _navigationContextSymbols.asStateFlow()
     private val _navigationContextLabel = MutableStateFlow("All")
 
-    private data class MtfCandleBundle(
-        val seriesKey: String = "",
-        val ltfLabel: String = "15m",
-        val htfLabel: String = "1H",
-        val htfCandles: List<Candle> = emptyList(),
-        val macroLabel: String = "4H",
-        val macroCandles: List<Candle> = emptyList(),
-        val spotCandles: List<Candle> = emptyList()
-    )
-
-    private val _mtfBundle = MutableStateFlow(MtfCandleBundle())
+    @Volatile
+    private var cachedTimeframes: List<Timeframe> = Timeframe.DEFAULTS
     private var klineStreamJob: Job? = null
-    private var mtfFetchJob: Job? = null
     private var replayJob: Job? = null
     private var countdownJob: Job? = null
     private var drawingsJob: Job? = null
@@ -205,10 +201,17 @@ class ChartViewModel(
     val webChartUpdates: SharedFlow<ChartWebUpdate> = _webChartUpdates.asSharedFlow()
 
     fun buildCurrentFullHistoryUpdate(): ChartWebUpdate.FullHistory? {
-        val list = uiState.value.displayedCandles
+        val series = _candleSeries.value
+        val expectedKey = currentSeriesKey()
+        if (series.seriesKey != expectedKey || series.candles.isEmpty()) return null
+        val list = if (_replayState.value.isActive && _replayState.value.cutoffIndex in series.candles.indices) {
+            series.candles.subList(0, _replayState.value.cutoffIndex + 1)
+        } else {
+            series.candles
+        }
         if (list.isEmpty()) return null
         return ChartWebUpdate.FullHistory(
-            seriesKey = currentSeriesKey(),
+            seriesKey = expectedKey,
             candles = list,
             fit = _viewport.value.isAutoFit
         )
@@ -225,7 +228,7 @@ class ChartViewModel(
         val source: PriceSource,
         val tfId: String,
         val allTfs: List<Timeframe>,
-        val candles: List<Candle>,
+        val candleSeries: CandleSeriesData,
         val contracts: List<FuturesContract>,
         val tickers: Map<String, TickerSnapshot>,
         val favorites: Set<String>
@@ -236,7 +239,7 @@ class ChartViewModel(
         _priceSource,
         _timeframeId,
         chartStateRepository.timeframes,
-        _candles,
+        _candleSeries,
         marketRepository.contracts,
         marketRepository.tickers,
         chartStateRepository.favoriteSymbols
@@ -247,7 +250,7 @@ class ChartViewModel(
             source = arr[1] as PriceSource,
             tfId = arr[2] as String,
             allTfs = arr[3] as List<Timeframe>,
-            candles = arr[4] as List<Candle>,
+            candleSeries = arr[4] as CandleSeriesData,
             contracts = arr[5] as List<FuturesContract>,
             tickers = arr[6] as Map<String, TickerSnapshot>,
             favorites = arr[7] as Set<String>
@@ -339,41 +342,20 @@ class ChartViewModel(
     )
 
     private val tbtSmcFlow: Flow<TbtSmcOutput> = combine(
-        _candles,
+        _candleSeries,
         _replayState,
-        chartStateRepository.preferences,
-        _mtfBundle,
-        _timeframeId
-    ) { candles, replay, prefs, mtf, tfId ->
-        if (!prefs.showTbtSmc) {
+        chartStateRepository.preferences
+    ) { series, replay, prefs ->
+        if (!prefs.showTbtSmc || series.candles.isEmpty()) {
             TbtSmcOutput.EMPTY
         } else {
+            val candles = series.candles
             val displayed = if (replay.isActive && replay.cutoffIndex in candles.indices) {
                 candles.subList(0, replay.cutoffIndex + 1)
             } else {
                 candles
             }
-            val expectedKeyPrefix = "${_symbol.value}_${tfId}_${_priceSource.value.name}"
-            val validMtf = mtf.seriesKey == expectedKeyPrefix
-            val cutoffCloseTime = displayed.lastOrNull()?.closeTime ?: Long.MAX_VALUE
-            val safeHtf = if (validMtf) {
-                if (replay.isActive) mtf.htfCandles.filter { it.closeTime <= cutoffCloseTime } else mtf.htfCandles
-            } else emptyList()
-            val safeMacro = if (validMtf) {
-                if (replay.isActive) mtf.macroCandles.filter { it.closeTime <= cutoffCloseTime } else mtf.macroCandles
-            } else emptyList()
-            val safeSpot = if (validMtf) {
-                if (replay.isActive) mtf.spotCandles.filter { it.closeTime <= cutoffCloseTime } else mtf.spotCandles
-            } else emptyList()
-            val mtfInput = TbtMtfInput(
-                currentTfLabel = if (validMtf) mtf.ltfLabel else tfId,
-                htfLabel = mtf.htfLabel,
-                htfCandles = safeHtf,
-                macroLabel = mtf.macroLabel,
-                macroCandles = safeMacro,
-                spotCandles = safeSpot
-            )
-            TbtSmcEngine.calculate(displayed, prefs.toTbtSmcConfig(), mtfInput)
+            TbtSmcEngine.calculate(displayed, prefs.toTbtSmcConfig())
         }
     }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
@@ -431,7 +413,8 @@ class ChartViewModel(
             activeTimeframe = activeTf,
             allTimeframes = market.allTfs,
             favoriteTimeframes = favTfs.ifEmpty { market.allTfs.take(6) },
-            candles = market.candles,
+            candles = market.candleSeries.candles,
+            candlesSeriesKey = market.candleSeries.seriesKey,
             isLoadingHistory = loading,
             isPaginatingBack = paginating,
             errorMessage = error,
@@ -468,10 +451,17 @@ class ChartViewModel(
     init {
         unsubscribeTickers = marketRepository.subscribeMarketTickers()
         viewModelScope.launch {
-            chartStateRepository.ensureSeeded()
+            chartStateRepository.timeframes.collect { list ->
+                if (list.isNotEmpty()) cachedTimeframes = list
+            }
+        }
+        viewModelScope.launch {
             if (marketRepository.contracts.value.isEmpty()) {
                 marketRepository.refreshMarketOverview()
             }
+        }
+        viewModelScope.launch {
+            chartStateRepository.ensureSeeded()
             val prefs = chartStateRepository.getPreferencesOnce()
             _symbol.value = prefs.lastSymbol
             _timeframeId.value = prefs.lastTimeframeId
@@ -501,7 +491,7 @@ class ChartViewModel(
         if (!contextLabel.isNullOrBlank()) {
             _navigationContextLabel.value = contextLabel
         }
-        if (_symbol.value == clean && _candles.value.isNotEmpty()) return
+        if (_symbol.value == clean && _candleSeries.value.candles.isNotEmpty()) return
         _symbol.value = clean
         _selectedDrawingId.value = null
         _selectedAlertId.value = null
@@ -511,7 +501,7 @@ class ChartViewModel(
         _rangeMeasurement.value = null
         shouldAutoFitOnNextLoad = true
         _viewport.update { it.copy(isAutoFit = uiState.value.preferences.autoFitDefault) }
-        exitBarReplay()
+        exitBarReplay(emitFullHistory = false)
         persistChartState()
         observeSymbolPersistedData(clean)
         reloadChartFeed()
@@ -554,7 +544,7 @@ class ChartViewModel(
         if (hasValidPriceRange) {
             _viewport.update { it.copy(isAutoFit = false) }
         }
-        exitBarReplay()
+        exitBarReplay(emitFullHistory = false)
         persistChartState()
         reloadChartFeed()
     }
@@ -570,7 +560,7 @@ class ChartViewModel(
         _priceSource.value = source
         _crosshair.value = CrosshairState()
         shouldAutoFitOnNextLoad = false
-        exitBarReplay()
+        exitBarReplay(emitFullHistory = false)
         persistChartState()
         reloadChartFeed()
     }
@@ -590,141 +580,75 @@ class ChartViewModel(
         }
     }
 
-    private fun launchMtfFetch(
-        symbol: String,
-        pair: String,
-        priceSource: PriceSource,
-        activeTf: Timeframe,
-        allTfs: List<Timeframe>,
-        seriesKey: String
-    ) {
-        mtfFetchJob?.cancel()
-        val mtfPair = TbtMtfTimeframeResolver.resolve(activeTf, allTfs)
-        if (mtfPair == null) {
-            _mtfBundle.value = MtfCandleBundle(seriesKey = seriesKey, ltfLabel = activeTf.label)
-            return
-        }
-        mtfFetchJob = viewModelScope.launch(Dispatchers.IO) {
-            suspend fun loadPairOnce() {
-                coroutineScope {
-                    val htfDeferred = async {
-                        marketRepository.getCachedCandles(symbol, priceSource, mtfPair.htf).takeIf { it.isNotEmpty() }
-                            ?: marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.htf).getOrNull()
-                            ?: emptyList()
-                    }
-                    val macroDeferred = async {
-                        if (mtfPair.macro.id == mtfPair.htf.id) emptyList()
-                        else marketRepository.getCachedCandles(symbol, priceSource, mtfPair.macro).takeIf { it.isNotEmpty() }
-                            ?: marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.macro).getOrNull()
-                            ?: emptyList()
-                    }
-                    val spotDeferred = async {
-                        marketRepository.fetchSpotKlines(symbol, activeTf, limit = 150)
-                    }
-                    val htfList = htfDeferred.await()
-                    val macroList = macroDeferred.await()
-                    val spotList = spotDeferred.await()
-                    _mtfBundle.value = MtfCandleBundle(
-                        seriesKey = seriesKey,
-                        ltfLabel = activeTf.label,
-                        htfLabel = mtfPair.htf.label,
-                        htfCandles = htfList,
-                        macroLabel = mtfPair.macro.label,
-                        macroCandles = macroList,
-                        spotCandles = spotList
-                    )
-                    // Also fetch fresh REST klines if only cached data was loaded initially
-                    val freshHtf = marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.htf).getOrNull()
-                    val freshMacro = if (mtfPair.macro.id == mtfPair.htf.id) emptyList()
-                    else marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.macro).getOrNull()
-                    if (freshHtf != null || freshMacro != null) {
-                        _mtfBundle.update { prev ->
-                            if (prev.seriesKey != seriesKey) prev
-                            else prev.copy(
-                                htfCandles = freshHtf ?: prev.htfCandles,
-                                macroCandles = freshMacro ?: prev.macroCandles
-                            )
-                        }
-                    }
-                }
-            }
-            loadPairOnce()
-            while (isActive) {
-                delay(60_000L)
-                if (!uiState.value.preferences.let { it.showTbtSmc && (it.tbtUseMultiTimeframe || it.tbtShowVolumeProfile) }) continue
-                val freshHtf = marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.htf).getOrNull()
-                val freshMacro = if (mtfPair.macro.id == mtfPair.htf.id) null
-                else marketRepository.fetchKlines(symbol, pair, priceSource, mtfPair.macro).getOrNull()
-                val freshSpot = marketRepository.fetchSpotKlines(symbol, activeTf, limit = 150)
-                if (freshHtf != null || freshMacro != null || freshSpot.isNotEmpty()) {
-                    _mtfBundle.update { prev ->
-                        if (prev.seriesKey != seriesKey) prev
-                        else prev.copy(
-                            htfCandles = freshHtf ?: prev.htfCandles,
-                            macroCandles = freshMacro ?: prev.macroCandles,
-                            spotCandles = freshSpot.ifEmpty { prev.spotCandles }
-                        )
-                    }
-                }
-            }
-        }
-    }
-
     fun reloadChartFeed() {
         klineStreamJob?.cancel()
-        mtfFetchJob?.cancel()
         hasReachedEarliestHistory = false
         val sym = _symbol.value
         val source = _priceSource.value
         val tfId = _timeframeId.value
+        val seriesKey = currentSeriesKey(sym, tfId, source)
+        val tf = cachedTimeframes.firstOrNull { it.id == tfId }
+            ?: Timeframe.DEFAULTS.firstOrNull { it.id == tfId }
+            ?: Timeframe.DEFAULTS[4]
+
+        // Immediately swap to fresh cached candles OR clear stale previous-timeframe candles synchronously
+        val freshCached = marketRepository.getFreshCachedCandles(sym, source, tf)
+        val isUninitializedRange = _viewport.value.priceMax <= _viewport.value.priceMin ||
+            (_viewport.value.priceMin == 0.0 && _viewport.value.priceMax == 100.0)
+        if (freshCached.isNotEmpty()) {
+            _candleSeries.value = CandleSeriesData(seriesKey, freshCached)
+            _isLoadingHistory.value = false
+            if (shouldAutoFitOnNextLoad || _viewport.value.isAutoFit || isUninitializedRange) {
+                autoFitIfNeeded(freshCached, force = isUninitializedRange)
+                shouldAutoFitOnNextLoad = false
+            }
+            if (!_replayState.value.isActive) {
+                _webChartUpdates.tryEmit(
+                    ChartWebUpdate.FullHistory(
+                        seriesKey = seriesKey,
+                        candles = freshCached,
+                        fit = _viewport.value.isAutoFit
+                    )
+                )
+            }
+        } else {
+            _candleSeries.value = CandleSeriesData(seriesKey, emptyList())
+            _isLoadingHistory.value = true
+            _webChartUpdates.tryEmit(ChartWebUpdate.ClearSeries(seriesKey))
+        }
+        _errorMessage.value = null
 
         klineStreamJob = viewModelScope.launch {
-            val allTfs = chartStateRepository.timeframes.first()
-            val tf = allTfs.firstOrNull { it.id == tfId } ?: Timeframe.DEFAULTS[4]
+            val resolvedTf = cachedTimeframes.firstOrNull { it.id == tfId }
+                ?: chartStateRepository.timeframes.first().firstOrNull { it.id == tfId }
+                ?: tf
             val contract = marketRepository.getContract(sym)
             val pair = contract?.pair ?: sym
 
-            val seriesKey = currentSeriesKey(sym, tfId, source)
-            val mtfPair = TbtMtfTimeframeResolver.resolve(tf, allTfs)
-            _mtfBundle.value = MtfCandleBundle(
-                seriesKey = seriesKey,
-                ltfLabel = tf.label,
-                htfLabel = mtfPair?.htf?.label ?: tf.label,
-                macroLabel = mtfPair?.macro?.label ?: tf.label
-            )
-            if (uiState.value.preferences.let { it.showTbtSmc && it.tbtUseMultiTimeframe }) {
-                launchMtfFetch(sym, pair, source, tf, allTfs, seriesKey)
-            }
-            val cached = marketRepository.getCachedCandles(sym, source, tf)
-            val isUninitializedRange = _viewport.value.priceMax <= _viewport.value.priceMin ||
-                (_viewport.value.priceMin == 0.0 && _viewport.value.priceMax == 100.0)
-            if (cached.isNotEmpty()) {
-                _candles.value = cached
-                _isLoadingHistory.value = false
-                if (shouldAutoFitOnNextLoad || _viewport.value.isAutoFit || isUninitializedRange) {
-                    autoFitIfNeeded(cached, force = isUninitializedRange)
-                    shouldAutoFitOnNextLoad = false
+            var restLoaded = freshCached.isNotEmpty()
+            var pendingLiveCandle: Candle? = null
+
+            // Start WebSocket subscription immediately in parallel with REST fetch so live ticks flow with 0ms extra wait
+            val liveJob = launch {
+                marketRepository.observeLiveKlineUpdates(
+                    symbol = sym,
+                    pair = pair,
+                    priceSource = source,
+                    timeframe = resolvedTf
+                ).collect { liveCandle ->
+                    if (!restLoaded) {
+                        pendingLiveCandle = liveCandle
+                        return@collect
+                    }
+                    applyLiveCandle(sym, source, seriesKey, liveCandle)
                 }
-                if (!_replayState.value.isActive) {
-                    _webChartUpdates.tryEmit(
-                        ChartWebUpdate.FullHistory(
-                            seriesKey = seriesKey,
-                            candles = cached,
-                            fit = _viewport.value.isAutoFit
-                        )
-                    )
-                }
-            } else {
-                _candles.value = emptyList()
-                _isLoadingHistory.value = true
             }
-            _errorMessage.value = null
 
             val fetchResult = marketRepository.fetchKlines(
                 symbol = sym,
                 pair = pair,
                 priceSource = source,
-                timeframe = tf
+                timeframe = resolvedTf
             )
             _isLoadingHistory.value = false
             fetchResult.onSuccess { list ->
@@ -736,18 +660,25 @@ class ChartViewModel(
                     }
                     return@onSuccess
                 }
-                _candles.value = list
+                val mergedList = pendingLiveCandle?.let { pending ->
+                    if (list.isNotEmpty() && pending.openTime >= list.last().openTime) {
+                        mergeCandleWithDelta(list, pending).updatedList
+                    } else list
+                } ?: list
+                pendingLiveCandle = null
+                restLoaded = true
+                _candleSeries.value = CandleSeriesData(seriesKey, mergedList)
                 val stillUninitialized = _viewport.value.priceMax <= _viewport.value.priceMin ||
                     (_viewport.value.priceMin == 0.0 && _viewport.value.priceMax == 100.0)
                 if (shouldAutoFitOnNextLoad || _viewport.value.isAutoFit || stillUninitialized) {
-                    autoFitIfNeeded(list, force = stillUninitialized)
+                    autoFitIfNeeded(mergedList, force = stillUninitialized)
                     shouldAutoFitOnNextLoad = false
                 }
                 if (!_replayState.value.isActive) {
                     _webChartUpdates.tryEmit(
                         ChartWebUpdate.FullHistory(
                             seriesKey = seriesKey,
-                            candles = list,
+                            candles = mergedList,
                             fit = _viewport.value.isAutoFit
                         )
                     )
@@ -760,49 +691,55 @@ class ChartViewModel(
                         "Upcoming listing • Trading has not started yet"
                     }
                 } else if (source != PriceSource.LAST) {
+                    liveJob.cancel()
                     _priceSource.value = PriceSource.LAST
                     _noticeMessage.value = "${source.label} unavailable in this region/server; showing Last Price"
                     persistChartState()
                     reloadChartFeed()
                     return@launch
-                } else if (_candles.value.isEmpty()) {
+                } else if (_candleSeries.value.candles.isEmpty()) {
                     _errorMessage.value = err.localizedMessage ?: "Unable to load chart candles"
                 }
+                restLoaded = true
             }
 
-            marketRepository.observeLiveKlineUpdates(
-                symbol = sym,
-                pair = pair,
-                priceSource = source,
-                timeframe = tf
-            ).collect { liveCandle ->
-                val (updatedList, deltaCandles, requiresFullSync) = mergeCandleWithDelta(_candles.value, liveCandle)
-                _candles.value = updatedList
-                if (_viewport.value.isAutoFit && !_replayState.value.isActive) {
-                    autoFitIfNeeded(updatedList)
-                }
-                if (!_replayState.value.isActive) {
-                    if (requiresFullSync) {
-                        _webChartUpdates.tryEmit(
-                            ChartWebUpdate.FullHistory(
-                                seriesKey = seriesKey,
-                                candles = updatedList,
-                                fit = false
-                            )
-                        )
-                    } else if (deltaCandles.isNotEmpty()) {
-                        _webChartUpdates.tryEmit(
-                            ChartWebUpdate.LiveCandleDelta(
-                                seriesKey = seriesKey,
-                                candles = deltaCandles,
-                                totalCount = updatedList.size
-                            )
-                        )
-                    }
-                }
-                evaluateForegroundAlerts(sym, source, liveCandle)
+            liveJob.join()
+        }
+    }
+
+    private suspend fun applyLiveCandle(
+        sym: String,
+        source: PriceSource,
+        seriesKey: String,
+        liveCandle: Candle
+    ) {
+        val currentSeries = _candleSeries.value
+        if (currentSeries.seriesKey != seriesKey) return
+        val (updatedList, deltaCandles, requiresFullSync) = mergeCandleWithDelta(currentSeries.candles, liveCandle)
+        _candleSeries.value = CandleSeriesData(seriesKey, updatedList)
+        if (_viewport.value.isAutoFit && !_replayState.value.isActive) {
+            autoFitIfNeeded(updatedList)
+        }
+        if (!_replayState.value.isActive) {
+            if (requiresFullSync) {
+                _webChartUpdates.tryEmit(
+                    ChartWebUpdate.FullHistory(
+                        seriesKey = seriesKey,
+                        candles = updatedList,
+                        fit = false
+                    )
+                )
+            } else if (deltaCandles.isNotEmpty()) {
+                _webChartUpdates.tryEmit(
+                    ChartWebUpdate.LiveCandleDelta(
+                        seriesKey = seriesKey,
+                        candles = deltaCandles,
+                        totalCount = updatedList.size
+                    )
+                )
             }
         }
+        evaluateForegroundAlerts(sym, source, liveCandle)
     }
 
     private data class CandleMergeResult(
@@ -883,15 +820,17 @@ class ChartViewModel(
     }
 
     fun paginateOlderHistoryIfNeeded() {
-        if (_isPaginatingBack.value || hasReachedEarliestHistory || _candles.value.isEmpty()) return
-        val oldestOpenTime = _candles.value.first().openTime
+        val currentSeries = _candleSeries.value
+        if (_isPaginatingBack.value || hasReachedEarliestHistory || currentSeries.candles.isEmpty()) return
+        val oldestOpenTime = currentSeries.candles.first().openTime
+        val expectedKey = currentSeries.seriesKey
         viewModelScope.launch {
             _isPaginatingBack.value = true
             val sym = _symbol.value
             val source = _priceSource.value
             val tf = uiState.value.activeTimeframe
             val pair = marketRepository.getContract(sym)?.pair ?: sym
-            val previousSize = _candles.value.size
+            val previousSize = _candleSeries.value.candles.size
             val res = marketRepository.fetchKlines(
                 symbol = sym,
                 pair = pair,
@@ -900,14 +839,15 @@ class ChartViewModel(
                 endTime = oldestOpenTime - 1L
             )
             res.onSuccess { combined ->
+                if (expectedKey != currentSeriesKey()) return@onSuccess
                 if (combined.size <= previousSize) {
                     hasReachedEarliestHistory = true
                 } else {
-                    _candles.value = combined
-                    if (!_replayState.value.isActive && sym == _symbol.value && source == _priceSource.value) {
+                    _candleSeries.value = CandleSeriesData(expectedKey, combined)
+                    if (!_replayState.value.isActive) {
                         _webChartUpdates.tryEmit(
                             ChartWebUpdate.FullHistory(
-                                seriesKey = currentSeriesKey(sym, tf.id, source),
+                                seriesKey = expectedKey,
                                 candles = combined,
                                 fit = false
                             )
@@ -1132,7 +1072,7 @@ class ChartViewModel(
 
     fun handleChartTap(point: ChartPoint, tappedDrawing: ChartDrawing?, tappedAlert: PriceAlert?, tappedIndex: Int) {
         if (_replayState.value.isPickingStart) {
-            val safeIdx = tappedIndex.coerceIn(0, (_candles.value.size - 1).coerceAtLeast(0))
+            val safeIdx = tappedIndex.coerceIn(0, (_candleSeries.value.candles.size - 1).coerceAtLeast(0))
             _replayState.value = BarReplayState(
                 isActive = true,
                 isPickingStart = false,
@@ -1356,7 +1296,7 @@ class ChartViewModel(
     }
 
     fun stepReplayForward() {
-        val total = _candles.value.size
+        val total = _candleSeries.value.candles.size
         if (total == 0) return
         _replayState.update { state ->
             if (!state.isActive) return@update state
@@ -1394,7 +1334,7 @@ class ChartViewModel(
                     val speed = _replayState.value.speedMultiplier.coerceIn(1, 10)
                     delay(1000L / speed)
                     stepReplayForward()
-                    if (_replayState.value.cutoffIndex >= _candles.value.lastIndex) {
+                    if (_replayState.value.cutoffIndex >= _candleSeries.value.candles.lastIndex) {
                         _replayState.update { it.copy(isPlaying = false) }
                         break
                     }
@@ -1415,22 +1355,25 @@ class ChartViewModel(
         }
     }
 
-    fun exitBarReplay() {
+    fun exitBarReplay(emitFullHistory: Boolean = true) {
+        val wasActive = _replayState.value.isActive || _replayState.value.isPickingStart
         replayJob?.cancel()
+        if (!wasActive) return
         _replayState.value = BarReplayState()
-        val full = _candles.value
+        if (!emitFullHistory) return
+        val series = _candleSeries.value
+        val expectedKey = currentSeriesKey()
+        if (series.seriesKey != expectedKey || series.candles.isEmpty()) return
         if (_viewport.value.isAutoFit) {
-            autoFitIfNeeded(full)
+            autoFitIfNeeded(series.candles)
         }
-        if (full.isNotEmpty()) {
-            _webChartUpdates.tryEmit(
-                ChartWebUpdate.FullHistory(
-                    seriesKey = currentSeriesKey(),
-                    candles = full,
-                    fit = _viewport.value.isAutoFit
-                )
+        _webChartUpdates.tryEmit(
+            ChartWebUpdate.FullHistory(
+                seriesKey = expectedKey,
+                candles = series.candles,
+                fit = _viewport.value.isAutoFit
             )
-        }
+        )
     }
 
     // Full screen & Preferences
@@ -1466,29 +1409,6 @@ class ChartViewModel(
 
     fun toggleTbtHud() {
         updatePreferences { it.copy(tbtShowHud = !it.tbtShowHud) }
-    }
-
-    fun toggleTbtTradeSetup() {
-        updatePreferences { it.copy(tbtShowTradeSetup = !it.tbtShowTradeSetup) }
-    }
-
-    fun toggleTbtVolumeProfile() {
-        updatePreferences { it.copy(tbtShowVolumeProfile = !it.tbtShowVolumeProfile) }
-    }
-
-    fun toggleTbtMultiTimeframe() {
-        val nextEnabled = !uiState.value.preferences.tbtUseMultiTimeframe
-        updatePreferences { it.copy(tbtUseMultiTimeframe = nextEnabled) }
-        if (nextEnabled && _mtfBundle.value.htfCandles.isEmpty()) {
-            viewModelScope.launch {
-                val allTfs = chartStateRepository.timeframes.first()
-                val tf = allTfs.firstOrNull { it.id == _timeframeId.value } ?: Timeframe.DEFAULTS[4]
-                val sym = _symbol.value
-                val pair = marketRepository.getContract(sym)?.pair ?: sym
-                val src = _priceSource.value
-                launchMtfFetch(sym, pair, src, tf, allTfs, currentSeriesKey(sym, tf.id, src))
-            }
-        }
     }
 
     private fun persistChartState() {
@@ -1532,7 +1452,6 @@ class ChartViewModel(
         unsubscribeTickers?.invoke()
         unsubscribeTickers = null
         klineStreamJob?.cancel()
-        mtfFetchJob?.cancel()
         replayJob?.cancel()
         countdownJob?.cancel()
         super.onCleared()
