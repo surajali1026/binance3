@@ -90,6 +90,7 @@ import com.example.domain.model.DrawingTool
 import com.example.domain.model.DrawingType
 import com.example.domain.model.PriceAlert
 import com.example.domain.model.PriceSource
+import com.example.domain.model.Timeframe
 import com.example.ui.theme.AlertAmber
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.BearishRed
@@ -481,7 +482,8 @@ fun ChartTimeframeStrip(
         ) {
             val favs = state.favoriteTimeframes
             val showActiveOutsideFavs = favs.none { it.id == state.activeTimeframe.id }
-            val visibleList = if (showActiveOutsideFavs) favs + state.activeTimeframe else favs
+            val visibleList = (if (showActiveOutsideFavs) favs + state.activeTimeframe else favs)
+                .sortedWith(compareBy<Timeframe> { it.durationMillis }.thenBy { it.sortOrder })
 
             visibleList.forEach { tf ->
                 val selected = tf.id == state.activeTimeframe.id
@@ -1193,7 +1195,8 @@ fun FullScreenTimeframeBar(
 
     val favs = state.favoriteTimeframes
     val showActiveOutsideFavs = favs.none { it.id == state.activeTimeframe.id }
-    val visibleList = if (showActiveOutsideFavs) favs + state.activeTimeframe else favs
+    val visibleList = (if (showActiveOutsideFavs) favs + state.activeTimeframe else favs)
+        .sortedWith(compareBy<Timeframe> { it.durationMillis }.thenBy { it.sortOrder })
 
     @Composable
     fun CoinNavigatorCluster(modifier: Modifier = Modifier) {

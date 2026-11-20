@@ -805,6 +805,7 @@ class ChartViewModel(
             }
             if (res != null && res.triggered) {
                 chartStateRepository.recordAlertTriggered(alert, res.triggeredPrice, res.message)
+                _noticeMessage.value = "Alert Triggered: ${res.message}"
                 AlertNotifier.notifyAlertTriggered(
                     context = appContext,
                     symbol = symbol,
@@ -1267,6 +1268,13 @@ class ChartViewModel(
         viewModelScope.launch { chartStateRepository.clearAlertHistory() }
     }
 
+    fun testAlertSound() {
+        AlertNotifier.playLoudBeepAlert(appContext, force = true)
+        if (uiState.value.preferences.vibrationEnabled) {
+            AlertNotifier.triggerVibration(appContext)
+        }
+    }
+
     // Timeframes
     fun toggleFavoriteTimeframe(id: String, isFav: Boolean) {
         viewModelScope.launch { chartStateRepository.toggleFavoriteTimeframe(id, isFav) }
@@ -1275,6 +1283,8 @@ class ChartViewModel(
     fun createCustomTimeframe(amount: Int, unit: CustomTimeUnit) {
         viewModelScope.launch {
             val created = chartStateRepository.addCustomTimeframe(amount, unit)
+            cachedTimeframes = (cachedTimeframes.filterNot { it.id == created.id } + created)
+                .sortedWith(compareBy<Timeframe> { it.durationMillis }.thenBy { it.sortOrder }.thenBy { it.id })
             selectTimeframe(created.id)
         }
     }

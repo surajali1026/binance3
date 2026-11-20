@@ -148,6 +148,15 @@ body.immersive-landscape{
     window.setOverlayData = function(payload){
         queuedOverlay = payload;
     };
+    window.clearTbtSmc = function(){
+        if(queuedOverlay){
+            try{
+                const d = typeof queuedOverlay === 'string' ? JSON.parse(queuedOverlay) : queuedOverlay;
+                d.tbtSmc = { enabled: false, markers: [], priceLines: [], zones: [] };
+                queuedOverlay = JSON.stringify(d);
+            }catch(_){}
+        }
+    };
     window.scrollToLiveEdge = function(){
         queuedScrollLive = true;
     };
@@ -847,18 +856,41 @@ body.immersive-landscape{
                 try{ candles.removePriceLine(tbtPriceLines[i]); }catch(_){}
             }
             tbtPriceLines = [];
+            // Belt-and-suspenders sweep: remove any leftover non-user price lines attached to candles
+            try{
+                if(candles && typeof candles.priceLines === 'function'){
+                    const attached = candles.priceLines();
+                    if(Array.isArray(attached)){
+                        for(let i = 0; i < attached.length; i++){
+                            const pl = attached[i];
+                            if(pl && pl !== quickGuideLine && lines.indexOf(pl) === -1){
+                                try{ candles.removePriceLine(pl); }catch(_){}
+                            }
+                        }
+                    }
+                }
+            }catch(_){}
         }
 
         function setTbtMarkersCompat(markerList){
             try{
+                const list = Array.isArray(markerList) ? markerList : [];
                 if(typeof LightweightCharts.createSeriesMarkers === 'function'){
-                    if(!tbtMarkersPlugin){
-                        tbtMarkersPlugin = LightweightCharts.createSeriesMarkers(candles, markerList);
+                    if(list.length === 0){
+                        if(tbtMarkersPlugin){
+                            try{ tbtMarkersPlugin.setMarkers([]); }catch(_){}
+                            if(typeof tbtMarkersPlugin.detach === 'function'){
+                                try{ tbtMarkersPlugin.detach(); }catch(_){}
+                                tbtMarkersPlugin = null;
+                            }
+                        }
+                    } else if(!tbtMarkersPlugin){
+                        tbtMarkersPlugin = LightweightCharts.createSeriesMarkers(candles, list);
                     } else {
-                        tbtMarkersPlugin.setMarkers(markerList);
+                        tbtMarkersPlugin.setMarkers(list);
                     }
                 } else if(candles && typeof candles.setMarkers === 'function'){
-                    candles.setMarkers(markerList);
+                    candles.setMarkers(list);
                 }
             }catch(err){
                 if(window.AndroidChart) AndroidChart.onError('TBT marker error: ' + err);
@@ -871,17 +903,26 @@ body.immersive-landscape{
             return LightweightCharts.LineStyle.Solid;
         }
 
+        function clearAllTbtVisuals(){
+            tbtEnabled = false;
+            tbtZones = [];
+            previousTbtSig = '';
+            clearTbtPriceLines();
+            setTbtMarkersCompat([]);
+            schedulePaintDrawings();
+        }
+
+        window.clearTbtSmc = clearAllTbtVisuals;
+
         function syncTbtSmc(tbtData){
-            const sig = JSON.stringify(tbtData || null);
+            if(!tbtData || !tbtData.enabled){
+                clearAllTbtVisuals();
+                return;
+            }
+            const sig = JSON.stringify(tbtData);
             if(sig === previousTbtSig) return;
             previousTbtSig = sig;
             clearTbtPriceLines();
-            if(!tbtData || !tbtData.enabled){
-                tbtEnabled = false;
-                tbtZones = [];
-                setTbtMarkersCompat([]);
-                return;
-            }
             tbtEnabled = true;
             tbtZones = Array.isArray(tbtData.zones) ? tbtData.zones : [];
             const rawMarkers = Array.isArray(tbtData.markers) ? tbtData.markers : [];

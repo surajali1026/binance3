@@ -23,10 +23,10 @@ interface WatchlistDao {
 
 @Dao
 interface TimeframeDao {
-    @Query("SELECT * FROM timeframes ORDER BY sortOrder ASC")
+    @Query("SELECT * FROM timeframes ORDER BY durationMillis ASC, sortOrder ASC")
     fun observeTimeframes(): Flow<List<TimeframeEntity>>
 
-    @Query("SELECT * FROM timeframes ORDER BY sortOrder ASC")
+    @Query("SELECT * FROM timeframes ORDER BY durationMillis ASC, sortOrder ASC")
     suspend fun getTimeframesOnce(): List<TimeframeEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

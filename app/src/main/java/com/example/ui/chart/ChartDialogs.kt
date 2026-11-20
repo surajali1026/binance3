@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Star
@@ -698,6 +699,7 @@ fun AlertsManagerSheet(
     onToggleAlertActive: (String, Boolean) -> Unit,
     onDeleteAlert: (String) -> Unit,
     onClearHistory: () -> Unit,
+    onTestAlertSound: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     var tab by remember { mutableIntStateOf(0) }
@@ -724,6 +726,16 @@ fun AlertsManagerSheet(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
+                IconButton(
+                    onClick = onTestAlertSound,
+                    modifier = Modifier.testTag("alerts_test_beep_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = "Test Loud Alert Beep",
+                        tint = AmberGold
+                    )
+                }
                 Button(
                     onClick = {
                         onDismiss()
@@ -943,6 +955,7 @@ fun EditDrawingSheet(
 fun ChartSettingsSheet(
     preferences: ChartPreferences,
     onUpdatePreferences: ((ChartPreferences) -> ChartPreferences) -> Unit,
+    onTestAlertSound: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val bullChoices = listOf(0xFF0ECB81L, 0xFF22C55EL, 0xFF38BDF8L)
@@ -1020,8 +1033,32 @@ fun ChartSettingsSheet(
             SettingToggleRow("Background Live Alert Service", preferences.backgroundMonitorEnabled) { v ->
                 onUpdatePreferences { it.copy(backgroundMonitorEnabled = v) }
             }
-            SettingToggleRow("Loud Alarm Notification Sound", preferences.loudSoundEnabled) { v ->
+            SettingToggleRow("Loud Beep Alert Sound", preferences.loudSoundEnabled) { v ->
                 onUpdatePreferences { it.copy(loudSoundEnabled = v) }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Preview Loud Beep Sound",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = onTestAlertSound,
+                    modifier = Modifier.testTag("test_alert_sound_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = "Test Loud Beep",
+                        tint = AmberGold,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Test Beep", color = AmberGold, fontWeight = FontWeight.Bold)
+                }
             }
             SettingToggleRow("Alert Vibration", preferences.vibrationEnabled) { v ->
                 onUpdatePreferences { it.copy(vibrationEnabled = v) }

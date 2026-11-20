@@ -144,7 +144,7 @@ data class Timeframe(
                 label = label,
                 durationMillis = duration,
                 nativeInterval = nativeMatch,
-                isCustom = nativeMatch == null,
+                isCustom = true,
                 isFavorite = true,
                 sortOrder = sortOrder
             )

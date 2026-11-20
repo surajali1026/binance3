@@ -20,10 +20,13 @@ import com.example.domain.model.PriceAlert
 import com.example.domain.model.Timeframe
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class ChartStateRepository(
     private val db: AppDatabase
 ) {
+    private val preferencesMutex = Mutex()
     private val watchlistDao: WatchlistDao = db.watchlistDao()
     private val timeframeDao: TimeframeDao = db.timeframeDao()
     private val drawingDao: DrawingDao = db.drawingDao()
@@ -46,9 +49,10 @@ class ChartStateRepository(
         }
     }
 
-    // Timeframes
+    // Timeframes (always sorted chronologically from shortest to longest interval)
     val timeframes: Flow<List<Timeframe>> = timeframeDao.observeTimeframes().map { entities ->
-        if (entities.isEmpty()) Timeframe.DEFAULTS else entities.map { it.toDomain() }
+        val list = if (entities.isEmpty()) Timeframe.DEFAULTS else entities.map { it.toDomain() }
+        list.sortedWith(compareBy<Timeframe> { it.durationMillis }.thenBy { it.sortOrder }.thenBy { it.id })
     }
 
     suspend fun toggleFavoriteTimeframe(id: String, isFavorite: Boolean) {
@@ -56,11 +60,22 @@ class ChartStateRepository(
     }
 
     suspend fun addCustomTimeframe(amount: Int, unit: CustomTimeUnit): Timeframe {
-        val current = timeframeDao.getTimeframesOnce()
-        val maxSort = (current.maxOfOrNull { it.sortOrder } ?: 15) + 1
-        val tf = Timeframe.createCustom(amount, unit, maxSort)
-        timeframeDao.upsert(TimeframeEntity.fromDomain(tf))
-        return tf
+        val safeAmount = amount.coerceAtLeast(1)
+        val durationMillis = safeAmount * unit.unitMillis
+        val current = timeframeDao.getTimeframesOnce().map { it.toDomain() }
+        val existingMatch = current.firstOrNull { it.durationMillis == durationMillis }
+        if (existingMatch != null) {
+            if (!existingMatch.isFavorite) {
+                timeframeDao.setFavorite(existingMatch.id, true)
+            }
+            return existingMatch.copy(isFavorite = true)
+        }
+        val created = Timeframe.createCustom(safeAmount, unit, sortOrder = 0)
+        val reordered = (current.filterNot { it.id == created.id } + created)
+            .sortedWith(compareBy<Timeframe> { it.durationMillis }.thenBy { it.sortOrder }.thenBy { it.id })
+            .mapIndexed { idx, tf -> tf.copy(sortOrder = idx) }
+        timeframeDao.upsertAll(reordered.map(TimeframeEntity::fromDomain))
+        return reordered.first { it.id == created.id }
     }
 
     suspend fun deleteCustomTimeframe(id: String) {
@@ -143,8 +158,10 @@ class ChartStateRepository(
         preferencesDao.getPreferencesOnce()?.toDomain() ?: ChartPreferences()
 
     suspend fun updatePreferences(transform: (ChartPreferences) -> ChartPreferences) {
-        val current = getPreferencesOnce()
-        val updated = transform(current)
-        preferencesDao.upsert(ChartPreferencesEntity.fromDomain(updated))
+        preferencesMutex.withLock {
+            val current = getPreferencesOnce()
+            val updated = transform(current)
+            preferencesDao.upsert(ChartPreferencesEntity.fromDomain(updated))
+        }
     }
 }

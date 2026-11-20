@@ -466,6 +466,7 @@ fun LightweightChartView(
         root.put("tbtSmc", tbtObj)
         root.toString()
     }
+    val latestOverlayJson by rememberUpdatedState(overlayJson)
 
     fun appendCandleJson(sb: StringBuilder, c: Candle) {
         sb.append("{\"time\":").append(c.openTime / 1000L)
@@ -487,7 +488,8 @@ fun LightweightChartView(
 
     fun pushFullHistory(view: WebView, update: ChartWebUpdate.FullHistory, includeOverlay: Boolean) {
         if (update.candles.isEmpty()) return
-        val sb = StringBuilder(update.candles.size * 96 + if (includeOverlay) overlayJson.length + 64 else 64)
+        val currentOverlay = latestOverlayJson
+        val sb = StringBuilder(update.candles.size * 96 + if (includeOverlay) currentOverlay.length + 64 else 64)
         sb.append("{\"seriesKey\":").append(JSONObject.quote(update.seriesKey))
             .append(",\"fit\":").append(update.fit)
             .append(",\"candles\":[")
@@ -496,10 +498,10 @@ fun LightweightChartView(
             appendCandleJson(sb, candle)
         }
         sb.append(']')
-        if (includeOverlay && overlayJson.length > 2) {
+        if (includeOverlay && currentOverlay.length > 2) {
             sb.append(',')
-            sb.append(overlayJson, 1, overlayJson.length - 1)
-            tracker.lastOverlayJson = overlayJson
+            sb.append(currentOverlay, 1, currentOverlay.length - 1)
+            tracker.lastOverlayJson = currentOverlay
         }
         sb.append('}')
         val payload = sb.toString()
@@ -640,6 +642,14 @@ fun LightweightChartView(
                 "window.setOverlayData && window.setOverlayData(${JSONObject.quote(overlayJson)})",
                 null
             )
+        }
+    }
+
+    // Explicitly purge all TBT SMC lines & markers in WebView the instant the indicator is hidden
+    LaunchedEffect(chartReady, useFallbackCanvas, state.preferences.showTbtSmc) {
+        if (useFallbackCanvas || !chartReady) return@LaunchedEffect
+        if (!state.preferences.showTbtSmc) {
+            webView?.evaluateJavascript("window.clearTbtSmc && window.clearTbtSmc()", null)
         }
     }
 

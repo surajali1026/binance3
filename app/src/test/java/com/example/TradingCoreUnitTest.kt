@@ -574,4 +574,35 @@ class TradingCoreUnitTest {
         val m15 = Timeframe.DEFAULTS.first { it.id == "15m" }
         assertEquals(200, CandleAggregator.recommendedFetchLimit(m15))
     }
+
+    @Test
+    fun `custom timeframe 10m sorts immediately before 15m and after 5m and 9m`() {
+        val custom10m = Timeframe.createCustom(10, CustomTimeUnit.MINUTES, sortOrder = 99)
+        assertTrue(custom10m.isCustom)
+        val sortedAll = (Timeframe.DEFAULTS + custom10m)
+            .sortedWith(compareBy<Timeframe> { it.durationMillis }.thenBy { it.sortOrder }.thenBy { it.id })
+        val idx9m = sortedAll.indexOfFirst { it.id == "9m" }
+        val idx10m = sortedAll.indexOfFirst { it.id == custom10m.id }
+        val idx15m = sortedAll.indexOfFirst { it.id == "15m" }
+        assertEquals(idx9m + 1, idx10m)
+        assertEquals(idx10m + 1, idx15m)
+
+        val sortedFavs = sortedAll.filter { it.isFavorite }
+        val favIdx5m = sortedFavs.indexOfFirst { it.id == "5m" }
+        val favIdx10m = sortedFavs.indexOfFirst { it.id == custom10m.id }
+        val favIdx15m = sortedFavs.indexOfFirst { it.id == "15m" }
+        assertEquals(favIdx5m + 1, favIdx10m)
+        assertEquals(favIdx10m + 1, favIdx15m)
+    }
+
+    @Test
+    fun `loud alert beep waveform generates strong multi-pulse PCM audio`() {
+        val pcm = com.example.alerts.AlertNotifier.synthesizeLoudBeepWaveform()
+        assertTrue(pcm.size > 60_000)
+        val peak = pcm.maxOf { kotlin.math.abs(it.toInt()) }
+        assertTrue("Expected loud peak amplitude > 25000 but was $peak", peak > 25_000)
+        // Verify silence gap between pulse 1 (ends 210ms) and pulse 2 (starts 310ms)
+        val gapSample = pcm[(44_100 * 260) / 1000]
+        assertEquals(0, gapSample.toInt())
+    }
 }

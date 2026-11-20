@@ -536,6 +536,7 @@ fun ChartScreen(
             onToggleAlertActive = viewModel::toggleAlertActive,
             onDeleteAlert = viewModel::deleteAlert,
             onClearHistory = viewModel::clearAlertHistory,
+            onTestAlertSound = viewModel::testAlertSound,
             onDismiss = { showAlertsManager = false }
         )
     }
@@ -554,6 +555,7 @@ fun ChartScreen(
         ChartSettingsSheet(
             preferences = state.preferences,
             onUpdatePreferences = viewModel::updatePreferences,
+            onTestAlertSound = viewModel::testAlertSound,
             onDismiss = { showSettings = false }
         )
     }
