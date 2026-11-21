@@ -552,7 +552,7 @@ class TradingCoreUnitTest {
         assertTrue(fullOut.markers.none { it.text == "BOS" || it.text == "CHoCH" })
         assertEquals(com.example.domain.indicator.TbtMarketBias.BULLISH, fullOut.summary.bias)
 
-        // 3. Respects all 5 original layer toggles
+        // 3. Respects all layer toggles (including Volume Imbalance line and Zone tags)
         val filteredOut = com.example.domain.indicator.TbtSmcEngine.calculate(
             candles,
             com.example.domain.indicator.TbtSmcConfig(
@@ -560,7 +560,9 @@ class TradingCoreUnitTest {
                 showPowerShift = false,
                 showOverlap = false,
                 showSignals = false,
-                showHud = false
+                showHud = false,
+                showVolImbalanceLine = false,
+                showZoneTags = false
             )
         )
         assertTrue(filteredOut.priceLines.isEmpty())
@@ -573,6 +575,122 @@ class TradingCoreUnitTest {
         // 5. Default recommended fetch limit is tuned for fast initial chart loading
         val m15 = Timeframe.DEFAULTS.first { it.id == "15m" }
         assertEquals(200, CandleAggregator.recommendedFetchLimit(m15))
+    }
+
+    @Test
+    fun `pure tbt smc htf api bias auto hide vol imbalance buy setup and backtest report work accurately`() {
+        // 1. Auto-Hide on HTF (>15m) logic on ChartUiState
+        val tf15m = Timeframe.DEFAULTS.first { it.id == "15m" }
+        val tf30m = Timeframe.DEFAULTS.first { it.id == "30m" }
+        val tf1h = Timeframe.DEFAULTS.first { it.id == "1H" }
+        val prefsAutoHide = com.example.domain.model.ChartPreferences(showTbtSmc = true, tbtAutoHideOnHtf = true)
+        assertTrue(com.example.ui.chart.ChartUiState(activeTimeframe = tf15m, preferences = prefsAutoHide).isTbtEffectivelyVisible)
+        assertFalse(com.example.ui.chart.ChartUiState(activeTimeframe = tf30m, preferences = prefsAutoHide).isTbtEffectivelyVisible)
+        assertFalse(com.example.ui.chart.ChartUiState(activeTimeframe = tf1h, preferences = prefsAutoHide).isTbtEffectivelyVisible)
+        assertTrue(
+            com.example.ui.chart.ChartUiState(
+                activeTimeframe = tf1h,
+                preferences = prefsAutoHide.copy(tbtAutoHideOnHtf = false)
+            ).isTbtEffectivelyVisible
+        )
+
+        // 2. Live HTF API candle analysis detects BULLISH trend bias
+        val utcDayBase = 1_750_032_000_000L
+        val htfCandles = (0 until 25).map { idx ->
+            val base = 95.0 + idx * 0.8
+            Candle(
+                openTime = utcDayBase + idx * 3_600_000L,
+                closeTime = utcDayBase + (idx + 1) * 3_600_000L - 1L,
+                open = base,
+                high = base + 1.2,
+                low = base - 0.5,
+                close = base + 0.9,
+                volume = 5000.0,
+                isClosed = true
+            )
+        }
+        assertEquals(
+            com.example.domain.indicator.TbtMarketBias.BULLISH,
+            com.example.domain.indicator.TbtSmcEngine.analyzeHigherTimeframe(htfCandles)
+        )
+
+        // 3. Single Volume Imbalance line + RBR/DBR tags + Backtest winRate/netR (no ICT session restriction!)
+        val step = 300_000L // 5m
+        val asiaStart = utcDayBase + 2 * 3_600_000L // 02:00 UTC (works 24/7 — no ICT Killzone gating)
+        fun bar(idx: Int, o: Double, h: Double, l: Double, c: Double, vol: Double = 1200.0) = Candle(
+            openTime = asiaStart + idx * step,
+            closeTime = asiaStart + idx * step + step - 1L,
+            open = o,
+            high = h,
+            low = l,
+            close = c,
+            volume = vol,
+            isClosed = true
+        )
+
+        val candles = mutableListOf<Candle>()
+        for (i in 0..15) {
+            val c = if (i % 2 == 0) 100.5 else 99.5
+            candles.add(bar(i, 100.0, 101.0, 99.0, c, vol = 1000.0))
+        }
+        // Bar 16 small base, Bar 17 huge bull impulse -> DBR tag
+        candles.add(bar(16, 100.0, 100.2, 99.6, 99.8, vol = 900.0))
+        candles.add(bar(17, 100.1, 104.2, 100.1, 104.0, vol = 1800.0))
+        // Bar 18..20: 3CR BUY (SL around ~100.9, entry ~105.0, risk ~4.1, TP at 1:2 = ~113.2)
+        candles.add(bar(18, 104.0, 104.2, 101.8, 102.0, vol = 1100.0))
+        candles.add(bar(19, 102.0, 102.5, 101.0, 102.2, vol = 1200.0))
+        candles.add(bar(20, 102.3, 105.2, 102.2, 105.0, vol = 2200.0))
+        // Bar 21..25: rally to hit 1:2 TP
+        candles.add(bar(21, 105.1, 109.0, 104.9, 108.8, vol = 1600.0))
+        candles.add(bar(22, 108.9, 114.5, 108.5, 114.0, vol = 1700.0))
+        candles.add(bar(23, 114.0, 118.0, 113.5, 117.5, vol = 1500.0))
+        candles.add(bar(24, 117.5, 119.0, 116.8, 118.2, vol = 1400.0))
+        candles.add(bar(25, 118.2, 120.0, 117.9, 119.5, vol = 1400.0))
+
+        // Check active BUY setup right at bar 20 (before TP hits!)
+        val liveSetupOut = com.example.domain.indicator.TbtSmcEngine.calculate(
+            candles = candles.subList(0, 21) + bar(21, 105.0, 106.0, 104.5, 105.5, vol = 1300.0) +
+                bar(22, 105.5, 106.2, 105.0, 105.8, vol = 1300.0) +
+                bar(23, 105.8, 106.5, 105.2, 106.0, vol = 1300.0) +
+                bar(24, 106.0, 106.8, 105.5, 106.2, vol = 1300.0),
+            config = com.example.domain.indicator.TbtSmcConfig(
+                targetRR = 3.0,
+                slBufferPct = 0.05,
+                showVolImbalanceLine = true,
+                showZoneTags = true
+            ),
+            htfCandles = htfCandles,
+            htfLabel = "1H"
+        )
+        val setup = liveSetupOut.activeSetup
+        assertNotNull("Expected active TBT BUY setup after 3CR BUY", setup)
+        assertEquals(com.example.domain.indicator.TbtTradeDirection.BUY, setup!!.direction)
+        assertEquals("1H", setup.htfLabel)
+        assertEquals(com.example.domain.indicator.TbtMarketBias.BULLISH, setup.htfBias)
+        assertTrue(setup.stopLoss < setup.entryPrice)
+        assertTrue(setup.takeProfit > setup.entryPrice)
+        assertEquals(5, setup.checklist.size)
+        assertTrue(liveSetupOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_ENTRY })
+        assertTrue(liveSetupOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_SL })
+        assertTrue(liveSetupOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.TRADE_TP })
+
+        // Check completed backtest win on full series
+        val out = com.example.domain.indicator.TbtSmcEngine.calculate(
+            candles = candles,
+            config = com.example.domain.indicator.TbtSmcConfig(
+                targetRR = 2.0,
+                slBufferPct = 0.05,
+                showVolImbalanceLine = true,
+                showZoneTags = true
+            ),
+            htfCandles = htfCandles,
+            htfLabel = "1H"
+        )
+        assertTrue(out.markers.any { it.text == "DBR" || it.text == "RBR" })
+        assertEquals(1, out.priceLines.count { it.category == com.example.domain.indicator.TbtPriceLineCategory.VOL_IMBALANCE })
+        assertTrue((out.backtestReport.totalTrades) >= 1)
+        assertEquals(100, out.backtestReport.winRate)
+        assertTrue((out.backtestReport.netR ?: 0.0) >= 2.0)
     }
 
     @Test

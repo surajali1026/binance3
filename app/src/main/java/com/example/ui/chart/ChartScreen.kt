@@ -258,8 +258,36 @@ fun ChartScreen(
                     .padding(start = 8.dp)
             )
 
+            // Top-Left TradingView-style Compact TBT SMC Tag, Buy/Sell Setup Card & Settings Panel
+            val tbtTopOffset = if (state.crosshair.isActive) 50.dp else 8.dp
+            TbtIndicatorControl(
+                state = state,
+                onToggleVisible = viewModel::toggleTbtSmc,
+                onToggleAutoHideOnHtf = viewModel::toggleTbtAutoHideOnHtf,
+                onToggleVolImbalanceLine = viewModel::toggleTbtVolImbalanceLine,
+                onToggleZoneTags = viewModel::toggleTbtZoneTags,
+                onToggleSignals = viewModel::toggleTbtSignals,
+                onToggleZones = viewModel::toggleTbtZones,
+                onTogglePowerShift = viewModel::toggleTbtPowerShift,
+                onToggleOverlap = viewModel::toggleTbtOverlap,
+                onToggleHud = viewModel::toggleTbtHud,
+                onUpdateTargetRR = viewModel::updateTbtTargetRR,
+                onUpdateSlBufferPct = viewModel::updateTbtSlBufferPct,
+                onToggleReplayMode = viewModel::toggleReplayMode,
+                onReplayStepBackward = viewModel::stepReplayBackward,
+                onReplayTogglePlay = viewModel::toggleReplayPlayPause,
+                onReplayStepForward = viewModel::stepReplayForward,
+                onReplaySetSpeed = viewModel::setReplaySpeed,
+                onReplayReset = viewModel::resetReplay,
+                onCreateEntryAlert = viewModel::createTbtEntryAlert,
+                onCreateSlTpAlerts = viewModel::createTbtSlTpAlerts,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = tbtTopOffset, start = 8.dp)
+            )
+
             // Top-Right TBT Real SMC Market Condition HUD Badge
-            if (state.preferences.showTbtSmc &&
+            if (state.isTbtEffectivelyVisible &&
                 state.preferences.tbtShowHud &&
                 state.displayedCandles.isNotEmpty()
             ) {
@@ -372,6 +400,7 @@ fun ChartScreen(
             if (state.replayState.isActive) {
                 BarReplayControllerBar(
                     state = state,
+                    onStepBackward = viewModel::stepReplayBackward,
                     onStepForward = viewModel::stepReplayForward,
                     onTogglePlay = viewModel::toggleReplayPlayPause,
                     onCycleSpeed = viewModel::cycleReplaySpeed,

@@ -119,7 +119,7 @@ fun ChartCanvas(
     val density = LocalDensity.current
     val haptic = LocalHapticFeedback.current
     val gestureScope = rememberCoroutineScope()
-    val alertDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f) }
+    val alertDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(3f, 6f), 0f) }
     val priceDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f) }
     val quickDashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f) }
 
@@ -489,8 +489,8 @@ fun ChartCanvas(
                         }
                     }
 
-                    // 2b. TBT SMC Price Lines & Markers (fallback Canvas rendering — no Supply/Demand zone rectangles)
-                    if (state.preferences.showTbtSmc) {
+                    // 2b. TBT SMC Price Lines & Markers (fallback Canvas rendering)
+                    if (state.isTbtEffectivelyVisible) {
                         state.tbtSmc.priceLines.forEach { pl ->
                             val py = mapper.priceToY(pl.price)
                             if (py in -10f..(height + 10f)) {
@@ -585,16 +585,16 @@ fun ChartCanvas(
                         drawCircle(color = AmberGold, radius = 7f, center = Offset(px, py))
                     }
 
-                    // 4. Dotted Alert Lines (no unnecessary name tags on chart)
+                    // 4. Subtle Dotted Alert Lines (no name tag on chart)
                     state.alertsForSymbol.filter { it.isActive }.forEach { alert ->
                         val ay = mapper.priceToY(alert.targetPrice)
                         if (ay in -10f..(height + 10f)) {
                             val isSelected = alert.id == state.selectedAlertId
                             drawLine(
-                                color = if (isSelected) AmberGold else AlertAmber.copy(alpha = 0.9f),
+                                color = if (isSelected) AmberGold.copy(alpha = 0.85f) else AlertAmber.copy(alpha = 0.48f),
                                 start = Offset(0f, ay),
                                 end = Offset(width, ay),
-                                strokeWidth = if (isSelected) 3f else 2f,
+                                strokeWidth = if (isSelected) 2f else 1.25f,
                                 pathEffect = alertDashEffect
                             )
                             if (isSelected) {
@@ -809,8 +809,8 @@ fun ChartCanvas(
                         }
                     }
 
-                    // Active Alert Price Pills on Axis (subtle amber tag, no text name)
-                    state.alertsForSymbol.filter { it.isActive }.forEach { alert ->
+                    // Selected Alert Price Pill on Axis (unselected alerts stay clean subtle dotted lines only)
+                    state.alertsForSymbol.filter { it.isActive && it.id == state.selectedAlertId }.forEach { alert ->
                         val ay = mapper.priceToY(alert.targetPrice)
                         if (ay in 8f..(size.height - 8f)) {
                             val label = ChartNumberFormatter.formatPrice(alert.targetPrice, precision)

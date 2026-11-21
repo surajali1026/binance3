@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
         AlertHistoryEntity::class,
         ChartPreferencesEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -169,6 +169,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtAutoHideOnHtf INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtTargetRR REAL NOT NULL DEFAULT 3.0")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtSlBufferPct REAL NOT NULL DEFAULT 0.05")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtUseKillzone INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtShowVolImbalanceLine INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtShowZoneTags INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: buildDatabase(context.applicationContext).also { INSTANCE = it }
@@ -180,7 +191,15 @@ abstract class AppDatabase : RoomDatabase() {
                 context,
                 AppDatabase::class.java,
                 "binance_pro.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+            ).addMigrations(
+                MIGRATION_1_2,
+                MIGRATION_2_3,
+                MIGRATION_3_4,
+                MIGRATION_4_5,
+                MIGRATION_5_6,
+                MIGRATION_6_7,
+                MIGRATION_7_8
+            )
                 .addCallback(object : Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {
                     super.onCreate(db)

@@ -29,6 +29,7 @@ import com.example.domain.model.TickerSnapshot
 import com.example.domain.model.Timeframe
 import com.example.domain.indicator.TbtSmcEngine
 import com.example.domain.indicator.TbtSmcOutput
+import com.example.domain.indicator.TbtTradeSetup
 import com.example.domain.model.WatchlistItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -134,6 +135,12 @@ data class ChartUiState(
             candles
         }
 
+    val isHtfTimeframe: Boolean
+        get() = activeTimeframe.durationMillis > 15L * Timeframe.MINUTE_MS
+
+    val isTbtEffectivelyVisible: Boolean
+        get() = preferences.showTbtSmc && !(preferences.tbtAutoHideOnHtf && isHtfTimeframe)
+
     val currentPrice: Double?
         get() = displayedCandles.lastOrNull()?.close ?: when (priceSource) {
             PriceSource.LAST -> ticker?.lastPrice
@@ -153,11 +160,18 @@ class ChartViewModel(
         val candles: List<Candle> = emptyList()
     )
 
+    private data class HtfCandleSeries(
+        val symbol: String = "",
+        val htfLabel: String? = null,
+        val candles: List<Candle> = emptyList()
+    )
+
     private val _symbol = MutableStateFlow("BTCUSDT")
     val symbolState: StateFlow<String> = _symbol.asStateFlow()
     private val _priceSource = MutableStateFlow(PriceSource.LAST)
     private val _timeframeId = MutableStateFlow("15m")
     private val _candleSeries = MutableStateFlow(CandleSeriesData())
+    private val _htfSeries = MutableStateFlow(HtfCandleSeries())
     private val _isLoadingHistory = MutableStateFlow(true)
     private val _isPaginatingBack = MutableStateFlow(false)
     private val _errorMessage = MutableStateFlow<String?>(null)
@@ -182,6 +196,7 @@ class ChartViewModel(
     @Volatile
     private var cachedTimeframes: List<Timeframe> = Timeframe.DEFAULTS
     private var klineStreamJob: Job? = null
+    private var htfFetchJob: Job? = null
     private var replayJob: Job? = null
     private var countdownJob: Job? = null
     private var drawingsJob: Job? = null
@@ -344,9 +359,25 @@ class ChartViewModel(
     private val tbtSmcFlow: Flow<TbtSmcOutput> = combine(
         _candleSeries,
         _replayState,
-        chartStateRepository.preferences
-    ) { series, replay, prefs ->
-        if (!prefs.showTbtSmc || series.candles.isEmpty()) {
+        _timeframeId,
+        chartStateRepository.timeframes,
+        chartStateRepository.preferences,
+        _htfSeries
+    ) { arr ->
+        val series = arr[0] as CandleSeriesData
+        val replay = arr[1] as BarReplayState
+        val tfId = arr[2] as String
+        @Suppress("UNCHECKED_CAST")
+        val allTfs = arr[3] as List<Timeframe>
+        val prefs = arr[4] as ChartPreferences
+        val htf = arr[5] as HtfCandleSeries
+
+        val activeTf = allTfs.firstOrNull { it.id == tfId }
+            ?: Timeframe.DEFAULTS.firstOrNull { it.id == tfId }
+            ?: Timeframe.DEFAULTS[4]
+        val isHtf = activeTf.durationMillis > 15L * Timeframe.MINUTE_MS
+        val shouldDraw = prefs.showTbtSmc && !(prefs.tbtAutoHideOnHtf && isHtf)
+        if (!shouldDraw || series.candles.isEmpty()) {
             TbtSmcOutput.EMPTY
         } else {
             val candles = series.candles
@@ -355,7 +386,20 @@ class ChartViewModel(
             } else {
                 candles
             }
-            TbtSmcEngine.calculate(displayed, prefs.toTbtSmcConfig())
+            val activeSym = series.seriesKey.substringBefore('_')
+            val validHtfCandles = if (htf.symbol.equals(activeSym, ignoreCase = true)) {
+                val cutoffTime = displayed.lastOrNull()?.closeTime ?: Long.MAX_VALUE
+                if (replay.isActive) htf.candles.filter { it.openTime <= cutoffTime } else htf.candles
+            } else {
+                emptyList()
+            }
+            val validHtfLabel = if (validHtfCandles.isNotEmpty()) htf.htfLabel else null
+            TbtSmcEngine.calculate(
+                candles = displayed,
+                config = prefs.toTbtSmcConfig(),
+                htfCandles = validHtfCandles,
+                htfLabel = validHtfLabel
+            )
         }
     }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
@@ -618,6 +662,9 @@ class ChartViewModel(
         }
         _errorMessage.value = null
 
+        // Fetch live Higher-Timeframe (1H for <=5m, 4H for 6m..15m) candles from Binance API for TBT SMC confluence
+        refreshHigherTimeframeContext(sym, source, tf)
+
         klineStreamJob = viewModelScope.launch {
             val resolvedTf = cachedTimeframes.firstOrNull { it.id == tfId }
                 ?: chartStateRepository.timeframes.first().firstOrNull { it.id == tfId }
@@ -704,6 +751,42 @@ class ChartViewModel(
             }
 
             liveJob.join()
+        }
+    }
+
+    private fun refreshHigherTimeframeContext(
+        symbol: String,
+        source: PriceSource,
+        activeTf: Timeframe
+    ) {
+        htfFetchJob?.cancel()
+        if (activeTf.durationMillis > 15L * Timeframe.MINUTE_MS) {
+            _htfSeries.value = HtfCandleSeries()
+            return
+        }
+        val targetHtfId = if (activeTf.durationMillis <= 5L * Timeframe.MINUTE_MS) "1H" else "4H"
+        val htfTf = Timeframe.DEFAULTS.firstOrNull { it.id.equals(targetHtfId, ignoreCase = true) } ?: return
+
+        // Use fresh cache immediately if available to avoid blocking LTF render
+        val cachedHtf = marketRepository.getFreshCachedCandles(symbol, source, htfTf)
+        if (cachedHtf.size >= 20) {
+            _htfSeries.value = HtfCandleSeries(symbol, htfTf.label, cachedHtf)
+            return
+        }
+
+        htfFetchJob = viewModelScope.launch {
+            val pair = marketRepository.getContract(symbol)?.pair ?: symbol
+            val res = marketRepository.fetchKlines(
+                symbol = symbol,
+                pair = pair,
+                priceSource = source,
+                timeframe = htfTf
+            )
+            res.onSuccess { list ->
+                if (_symbol.value.equals(symbol, ignoreCase = true) && list.size >= 20) {
+                    _htfSeries.value = HtfCandleSeries(symbol, htfTf.label, list)
+                }
+            }
         }
     }
 
@@ -1103,6 +1186,9 @@ class ChartViewModel(
                         type = DrawingType.HORIZONTAL_LINE,
                         points = listOf(point)
                     )
+                    _drawingsForSymbol.update { existing ->
+                        if (existing.any { it.id == drawing.id }) existing else existing + drawing
+                    }
                     viewModelScope.launch { chartStateRepository.saveDrawing(drawing) }
                     _activeTool.value = DrawingTool.NONE
                     _pendingPoints.value = emptyList()
@@ -1121,6 +1207,9 @@ class ChartViewModel(
                             type = type,
                             points = listOf(existing.first(), point)
                         )
+                        _drawingsForSymbol.update { current ->
+                            if (current.any { it.id == drawing.id }) current else current + drawing
+                        }
                         viewModelScope.launch { chartStateRepository.saveDrawing(drawing) }
                         _activeTool.value = DrawingTool.NONE
                         _pendingPoints.value = emptyList()
@@ -1243,9 +1332,48 @@ class ChartViewModel(
             isActive = true,
             lastEvaluatedPrice = currentPrice
         )
+        _alertsForSymbol.update { existing ->
+            if (existing.any { it.id == alert.id }) existing else listOf(alert) + existing
+        }
         viewModelScope.launch { chartStateRepository.saveAlert(alert) }
         _axisQuickAlertPrice.value = null
-        _selectedAlertId.value = alert.id
+        _selectedAlertId.value = null
+    }
+
+    fun createTbtEntryAlert(setup: TbtTradeSetup, useRetracePrice: Boolean = false) {
+        val target = if (useRetracePrice && setup.retracementEntryPrice != null) {
+            setup.retracementEntryPrice
+        } else {
+            setup.entryPrice
+        }
+        val current = uiState.value.currentPrice
+        val condition = when {
+            current == null -> AlertCondition.REACHES
+            target < current -> AlertCondition.CROSSES_BELOW
+            target > current -> AlertCondition.CROSSES_ABOVE
+            else -> AlertCondition.REACHES
+        }
+        createAlert(price = target, condition = condition)
+        val precision = uiState.value.contract?.pricePrecision ?: 2
+        val kind = if (useRetracePrice && setup.retracementEntryPrice != null) "VI Limit" else "${setup.direction.label} Entry"
+        _noticeMessage.value = "$kind alert set @ ${ChartNumberFormatter.formatPrice(target, precision)}"
+    }
+
+    fun createTbtSlTpAlerts(setup: TbtTradeSetup) {
+        val slCondition = if (setup.direction == com.example.domain.indicator.TbtTradeDirection.BUY) {
+            AlertCondition.CROSSES_BELOW
+        } else {
+            AlertCondition.CROSSES_ABOVE
+        }
+        val tpCondition = if (setup.direction == com.example.domain.indicator.TbtTradeDirection.BUY) {
+            AlertCondition.CROSSES_ABOVE
+        } else {
+            AlertCondition.CROSSES_BELOW
+        }
+        createAlert(price = setup.stopLoss, condition = slCondition)
+        createAlert(price = setup.takeProfit, condition = tpCondition)
+        val precision = uiState.value.contract?.pricePrecision ?: 2
+        _noticeMessage.value = "SL (${ChartNumberFormatter.formatPrice(setup.stopLoss, precision)}) & TP (${ChartNumberFormatter.formatPrice(setup.takeProfit, precision)}) alerts set"
     }
 
     fun moveAlertPrice(alertId: String, newPrice: Double) {
@@ -1303,6 +1431,87 @@ class ChartViewModel(
         _activeTool.value = DrawingTool.NONE
         _drawingToolbarExpanded.value = false
         _replayState.value = BarReplayState(isActive = false, isPickingStart = true)
+    }
+
+    fun toggleReplayMode(enabled: Boolean) {
+        if (!enabled) {
+            exitBarReplay(emitFullHistory = true)
+            return
+        }
+        val candles = _candleSeries.value.candles
+        if (candles.isEmpty()) return
+        replayJob?.cancel()
+        _activeTool.value = DrawingTool.NONE
+        _drawingToolbarExpanded.value = false
+        val defaultCutoff = (candles.size - 100)
+            .coerceAtLeast(min(20, candles.lastIndex))
+            .coerceIn(0, candles.lastIndex)
+        _replayState.value = BarReplayState(
+            isActive = true,
+            isPickingStart = false,
+            cutoffIndex = defaultCutoff,
+            isPlaying = false,
+            speedMultiplier = _replayState.value.speedMultiplier.coerceIn(1, 5)
+        )
+        val replayed = candles.subList(0, defaultCutoff + 1)
+        if (_viewport.value.isAutoFit) {
+            autoFitIfNeeded(replayed)
+        }
+        _webChartUpdates.tryEmit(
+            ChartWebUpdate.FullHistory(
+                seriesKey = currentSeriesKey(),
+                candles = replayed,
+                fit = false
+            )
+        )
+    }
+
+    fun stepReplayBackward() {
+        val candles = _candleSeries.value.candles
+        if (candles.isEmpty()) return
+        val current = _replayState.value
+        if (!current.isActive) return
+        val minIdx = min(20, candles.lastIndex)
+        val prevIdx = (current.cutoffIndex - 1).coerceAtLeast(minIdx)
+        if (prevIdx == current.cutoffIndex) return
+        _replayState.update { it.copy(cutoffIndex = prevIdx, isPlaying = false) }
+        replayJob?.cancel()
+        val replayed = candles.subList(0, prevIdx + 1)
+        if (_viewport.value.isAutoFit) {
+            autoFitIfNeeded(replayed)
+        }
+        _webChartUpdates.tryEmit(
+            ChartWebUpdate.FullHistory(
+                seriesKey = currentSeriesKey(),
+                candles = replayed,
+                fit = false
+            )
+        )
+    }
+
+    fun resetReplay() {
+        val candles = _candleSeries.value.candles
+        if (candles.isEmpty() || !_replayState.value.isActive) return
+        replayJob?.cancel()
+        val resetCutoff = (candles.size - 100)
+            .coerceAtLeast(min(20, candles.lastIndex))
+            .coerceIn(0, candles.lastIndex)
+        _replayState.update { it.copy(cutoffIndex = resetCutoff, isPlaying = false) }
+        val replayed = candles.subList(0, resetCutoff + 1)
+        if (_viewport.value.isAutoFit) {
+            autoFitIfNeeded(replayed)
+        }
+        _webChartUpdates.tryEmit(
+            ChartWebUpdate.FullHistory(
+                seriesKey = currentSeriesKey(),
+                candles = replayed,
+                fit = false
+            )
+        )
+    }
+
+    fun setReplaySpeed(speedMultiplier: Int) {
+        _replayState.update { it.copy(speedMultiplier = speedMultiplier.coerceIn(1, 10)) }
     }
 
     fun stepReplayForward() {
@@ -1421,6 +1630,28 @@ class ChartViewModel(
         updatePreferences { it.copy(tbtShowHud = !it.tbtShowHud) }
     }
 
+    fun toggleTbtAutoHideOnHtf() {
+        updatePreferences { it.copy(tbtAutoHideOnHtf = !it.tbtAutoHideOnHtf) }
+    }
+
+    fun toggleTbtVolImbalanceLine() {
+        updatePreferences { it.copy(tbtShowVolImbalanceLine = !it.tbtShowVolImbalanceLine) }
+    }
+
+    fun toggleTbtZoneTags() {
+        updatePreferences { it.copy(tbtShowZoneTags = !it.tbtShowZoneTags) }
+    }
+
+    fun updateTbtTargetRR(value: Double) {
+        val clamped = (Math.round(value.coerceIn(1.0, 20.0) * 10.0) / 10.0)
+        updatePreferences { it.copy(tbtTargetRR = clamped) }
+    }
+
+    fun updateTbtSlBufferPct(value: Double) {
+        val clamped = (Math.round(value.coerceIn(0.0, 5.0) * 100.0) / 100.0)
+        updatePreferences { it.copy(tbtSlBufferPct = clamped) }
+    }
+
     private fun persistChartState() {
         persistJob?.cancel()
         persistJob = viewModelScope.launch {
@@ -1462,6 +1693,7 @@ class ChartViewModel(
         unsubscribeTickers?.invoke()
         unsubscribeTickers = null
         klineStreamJob?.cancel()
+        htfFetchJob?.cancel()
         replayJob?.cancel()
         countdownJob?.cancel()
         super.onCleared()

@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
@@ -534,20 +535,6 @@ fun ChartTimeframeStrip(
 
         Spacer(modifier = Modifier.width(4.dp))
 
-        // 1-Click TBT SMC Toggle + Layer Settings Popover
-        TbtSmcControls(
-            showTbtSmc = state.preferences.showTbtSmc,
-            config = state.preferences.toTbtSmcConfig(),
-            onToggleMain = onToggleTbtSmc,
-            onToggleZones = onToggleTbtZones,
-            onTogglePowerShift = onToggleTbtPowerShift,
-            onToggleOverlap = onToggleTbtOverlap,
-            onToggleSignals = onToggleTbtSignals,
-            onToggleHud = onToggleTbtHud
-        )
-
-        Spacer(modifier = Modifier.width(2.dp))
-
         // Quick Price Reset / Auto-Fit & Bar Replay triggers
         Box(
             modifier = Modifier
@@ -786,6 +773,21 @@ fun TbtConditionHudBadge(
                     color = biasColor
                 )
             }
+        }
+
+        if (summary.htfLabel != null && summary.htfBias != null) {
+            val htfColor = when (summary.htfBias) {
+                TbtMarketBias.BULLISH -> BullishGreen
+                TbtMarketBias.BEARISH -> BearishRed
+                TbtMarketBias.SIDEWAYS -> AmberGold
+            }
+            Text(
+                text = "HTF ${summary.htfLabel}: ${summary.htfBias.label}",
+                style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold),
+                color = htfColor,
+                maxLines = 1,
+                softWrap = false
+            )
         }
 
         summary.activeBullPower?.let { bull ->
@@ -1106,6 +1108,7 @@ fun SelectedAlertActionPill(
 @Composable
 fun BarReplayControllerBar(
     state: ChartUiState,
+    onStepBackward: () -> Unit = {},
     onStepForward: () -> Unit,
     onTogglePlay: () -> Unit,
     onCycleSpeed: () -> Unit,
@@ -1129,6 +1132,13 @@ fun BarReplayControllerBar(
             color = CyanInfo,
             modifier = Modifier.padding(horizontal = 4.dp)
         )
+        IconButton(onClick = onStepBackward, modifier = Modifier.size(36.dp)) {
+            Icon(
+                imageVector = Icons.Filled.SkipPrevious,
+                contentDescription = "Step Previous Bar",
+                tint = TextPrimary
+            )
+        }
         IconButton(onClick = onTogglePlay, modifier = Modifier.size(36.dp)) {
             Icon(
                 imageVector = if (replay.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
@@ -1278,21 +1288,8 @@ fun FullScreenTimeframeBar(
     }
 
     @Composable
-    fun ActionButtonsCluster(includeTbt: Boolean = true) {
+    fun ActionButtonsCluster() {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (includeTbt) {
-                TbtSmcControls(
-                    showTbtSmc = state.preferences.showTbtSmc,
-                    config = state.preferences.toTbtSmcConfig(),
-                    onToggleMain = onToggleTbtSmc,
-                    onToggleZones = onToggleTbtZones,
-                    onTogglePowerShift = onToggleTbtPowerShift,
-                    onToggleOverlap = onToggleTbtOverlap,
-                    onToggleSignals = onToggleTbtSignals,
-                    onToggleHud = onToggleTbtHud,
-                    modifier = Modifier.padding(end = 3.dp)
-                )
-            }
 
             Box(
                 modifier = Modifier
@@ -1460,7 +1457,7 @@ fun FullScreenTimeframeBar(
 
                 Spacer(modifier = Modifier.width(4.dp))
 
-                ActionButtonsCluster(includeTbt = true)
+                ActionButtonsCluster()
             }
         } else {
             // Compact portrait full-screen layout: preserves full coin name, price selector dropdown, TBT SMC controls, and timeframes without clipping
@@ -1511,7 +1508,7 @@ fun FullScreenTimeframeBar(
                         modifier = Modifier.padding(end = 2.dp)
                     )
 
-                    ActionButtonsCluster(includeTbt = false)
+                    ActionButtonsCluster()
                 }
 
                 Row(
@@ -1522,17 +1519,6 @@ fun FullScreenTimeframeBar(
                 ) {
                     TimeframeChipsAndMoreRow(
                         modifier = Modifier.weight(1f)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    TbtSmcControls(
-                        showTbtSmc = state.preferences.showTbtSmc,
-                        config = state.preferences.toTbtSmcConfig(),
-                        onToggleMain = onToggleTbtSmc,
-                        onToggleZones = onToggleTbtZones,
-                        onTogglePowerShift = onToggleTbtPowerShift,
-                        onToggleOverlap = onToggleTbtOverlap,
-                        onToggleSignals = onToggleTbtSignals,
-                        onToggleHud = onToggleTbtHud
                     )
                 }
             }

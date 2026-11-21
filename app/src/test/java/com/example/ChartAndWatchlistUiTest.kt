@@ -552,43 +552,97 @@ class ChartAndWatchlistUiTest {
 
     @Test
     @Config(qualifiers = "w411dp-h891dp-xxhdpi")
-    fun `tbt smc toggle button and layer settings menu work across portrait and landscape bars`() {
+    fun `pure tbt smc control shows buy setup card alerts replay and settings without ict`() {
         var mainToggled = 0
-        var zonesToggled = 0
-        var powerToggled = 0
-        var overlapToggled = 0
+        var autoHideToggled = 0
+        var volImbToggled = 0
+        var zoneTagsToggled = 0
         var signalsToggled = 0
-        var hudToggled = 0
+        var replayToggledTo: Boolean? = null
+        var prevSteps = 0
+        var nextSteps = 0
+        var resetClicks = 0
+        var selectedSpeed = 0
+        var entryAlertClicks = 0
+        var slTpAlertClicks = 0
+
+        val sampleSetup = com.example.domain.indicator.TbtTradeSetup(
+            direction = com.example.domain.indicator.TbtTradeDirection.BUY,
+            triggerName = "3CR BUY",
+            reason = "Demand/Overlap Tap + Power Shift + 3CR BUY",
+            grade = "A+",
+            score = 5,
+            entryPrice = 91500.0,
+            retracementEntryPrice = 91320.0,
+            stopLoss = 91100.0,
+            takeProfit = 92700.0,
+            riskReward = 3.0,
+            riskPercent = 0.44,
+            htfLabel = "1H",
+            htfBias = com.example.domain.indicator.TbtMarketBias.BULLISH,
+            volumeConfirmed = true,
+            checklist = listOf(
+                com.example.domain.indicator.TbtChecklistItem("1H API Trend (BULLISH)", true),
+                com.example.domain.indicator.TbtChecklistItem("Demand/Supply or Overlap POI", true),
+                com.example.domain.indicator.TbtChecklistItem("TBT Power Shift Control", true),
+                com.example.domain.indicator.TbtChecklistItem("Trigger: 3CR BUY", true),
+                com.example.domain.indicator.TbtChecklistItem("Binance Volume Confirmation", true)
+            )
+        )
 
         val state = ChartUiState(
             symbol = "BTCUSDT",
             contract = FuturesContract("BTCUSDT", "BTCUSDT", "BTC", "USDT", 2, 3, 0.1, "PERPETUAL", "TRADING"),
-            preferences = com.example.domain.model.ChartPreferences(showTbtSmc = true)
+            activeTimeframe = com.example.domain.model.Timeframe.DEFAULTS.first { it.id == "15m" },
+            replayState = com.example.domain.model.BarReplayState(isActive = true, cutoffIndex = 40, isPlaying = false, speedMultiplier = 2),
+            preferences = com.example.domain.model.ChartPreferences(showTbtSmc = true, tbtAutoHideOnHtf = true, tbtShowSignals = true),
+            tbtSmc = com.example.domain.indicator.TbtSmcOutput(
+                summary = com.example.domain.indicator.TbtConditionSummary(
+                    bias = com.example.domain.indicator.TbtMarketBias.BULLISH,
+                    htfLabel = "1H",
+                    htfBias = com.example.domain.indicator.TbtMarketBias.BULLISH,
+                    activeBullPower = 91250.5,
+                    activeBearPower = null,
+                    lastSignal = "3CR BUY Confirmed"
+                ),
+                backtestReport = com.example.domain.indicator.TbtBacktestReport(
+                    totalTrades = 6,
+                    wins = 4,
+                    losses = 2,
+                    winRate = 67,
+                    netR = 10.0
+                ),
+                activeSetup = sampleSetup
+            )
         )
 
         composeTestRule.setContent {
             BinanceProTheme {
                 androidx.compose.foundation.layout.Column {
-                    com.example.ui.chart.ChartTimeframeStrip(
+                    com.example.ui.chart.TbtIndicatorControl(
                         state = state,
-                        onSelectTimeframe = {},
-                        onOpenTimeframePicker = {},
-                        onAutoFit = {},
-                        onStartReplay = {},
-                        onToggleTbtSmc = { mainToggled++ },
-                        onToggleTbtZones = { zonesToggled++ },
-                        onToggleTbtPowerShift = { powerToggled++ },
-                        onToggleTbtOverlap = { overlapToggled++ },
-                        onToggleTbtSignals = { signalsToggled++ },
-                        onToggleTbtHud = { hudToggled++ }
+                        onToggleVisible = { mainToggled++ },
+                        onToggleAutoHideOnHtf = { autoHideToggled++ },
+                        onToggleVolImbalanceLine = { volImbToggled++ },
+                        onToggleZoneTags = { zoneTagsToggled++ },
+                        onToggleSignals = { signalsToggled++ },
+                        onToggleZones = {},
+                        onTogglePowerShift = {},
+                        onToggleOverlap = {},
+                        onToggleHud = {},
+                        onUpdateTargetRR = {},
+                        onUpdateSlBufferPct = {},
+                        onToggleReplayMode = { replayToggledTo = it },
+                        onReplayStepBackward = { prevSteps++ },
+                        onReplayTogglePlay = {},
+                        onReplayStepForward = { nextSteps++ },
+                        onReplaySetSpeed = { selectedSpeed = it },
+                        onReplayReset = { resetClicks++ },
+                        onCreateEntryAlert = { _, _ -> entryAlertClicks++ },
+                        onCreateSlTpAlerts = { slTpAlertClicks++ }
                     )
                     com.example.ui.chart.TbtConditionHudBadge(
-                        summary = com.example.domain.indicator.TbtConditionSummary(
-                            bias = com.example.domain.indicator.TbtMarketBias.BULLISH,
-                            activeBullPower = 91250.5,
-                            activeBearPower = null,
-                            lastSignal = "3CR BUY Confirmed"
-                        ),
+                        summary = state.tbtSmc.summary,
                         precision = 2
                     )
                 }
@@ -596,68 +650,110 @@ class ChartAndWatchlistUiTest {
         }
         composeTestRule.waitForIdle()
 
-        // Floating HUD displays bias, active power level, and last signal
-        composeTestRule.onNodeWithTag("tbt_condition_hud").assertIsDisplayed()
-        composeTestRule.onNodeWithText("BULLISH").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Bull Pwr: 91,250.50").assertIsDisplayed()
-        composeTestRule.onNodeWithText("3CR BUY Confirmed").assertIsDisplayed()
+        // Pure TBT SMC tag (zero ICT!) & backtest stats
+        composeTestRule.onNodeWithTag("tbt_indicator_tag").assertIsDisplayed()
+        composeTestRule.onNodeWithText("TBT SMC+ICT").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("tbt_backtest_stats").assertIsDisplayed()
+        composeTestRule.onNodeWithText("67%").assertIsDisplayed()
+        composeTestRule.onNodeWithText("+10.0R").assertIsDisplayed()
 
-        // 1-click toggle works
+        // Actionable BUY Setup Pill expands into full Trade Plan Card with 1-tap Alert buttons
+        composeTestRule.onNodeWithTag("tbt_trade_setup_pill").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("tbt_trade_setup_card").assertIsDisplayed()
+        composeTestRule.onNodeWithText("TBT BUY LONG SETUP").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("tbt_setup_alert_entry_btn").performClick()
+        composeTestRule.onNodeWithTag("tbt_setup_alert_sltp_btn").performClick()
+        assertEquals(1, entryAlertClicks)
+        assertEquals(1, slTpAlertClicks)
+
+        // Floating HUD displays HTF API bias, active power level, and last signal
+        composeTestRule.onNodeWithTag("tbt_condition_hud").assertIsDisplayed()
+        composeTestRule.onNodeWithText("HTF 1H: BULLISH").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Bull Pwr: 91,250.50").assertIsDisplayed()
+
+        // Eye toggle works
         composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
         assertEquals(1, mainToggled)
 
-        // Settings popover opens and toggles all 5 original layers
+        // Settings panel opens with Replay & pure TBT SMC Strategy controls (no ICT Killzone)
         composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed().performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithTag("tbt_smc_settings_menu").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("tbt_layer_zones").performClick()
-        composeTestRule.onNodeWithTag("tbt_layer_power_shift").performClick()
-        composeTestRule.onNodeWithTag("tbt_layer_overlap").performClick()
-        composeTestRule.onNodeWithTag("tbt_layer_signals").performClick()
-        composeTestRule.onNodeWithTag("tbt_layer_hud").performClick()
-        assertEquals(1, zonesToggled)
-        assertEquals(1, powerToggled)
-        assertEquals(1, overlapToggled)
+        composeTestRule.onNodeWithTag("tbt_smc_settings_panel").assertIsDisplayed()
+        composeTestRule.onNodeWithText("ICT Killzone Filter").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("tbt_replay_prev_btn").performClick()
+        composeTestRule.onNodeWithTag("tbt_replay_next_btn").performClick()
+        composeTestRule.onNodeWithTag("tbt_replay_speed_5x").performClick()
+        composeTestRule.onNodeWithTag("tbt_replay_reset_btn").performClick()
+        composeTestRule.onNodeWithTag("tbt_replay_mode_toggle").performClick()
+        composeTestRule.onNodeWithTag("tbt_toggle_auto_hide_htf").performClick()
+        composeTestRule.onNodeWithTag("tbt_toggle_buy_sell_signals").performClick()
+        composeTestRule.onNodeWithTag("tbt_toggle_vol_imbalance").performClick()
+        composeTestRule.onNodeWithTag("tbt_toggle_zone_tags").performClick()
+
+        assertEquals(1, prevSteps)
+        assertEquals(1, nextSteps)
+        assertEquals(5, selectedSpeed)
+        assertEquals(1, resetClicks)
+        assertEquals(false, replayToggledTo)
+        assertEquals(1, autoHideToggled)
         assertEquals(1, signalsToggled)
-        assertEquals(1, hudToggled)
+        assertEquals(1, volImbToggled)
+        assertEquals(1, zoneTagsToggled)
     }
 
     @Test
     @Config(qualifiers = "w800dp-h400dp-land")
-    fun `fullscreen landscape bar exposes tbt smc controls`() {
-        var toggled = false
+    fun `tbt indicator control shows auto hidden badge on htf timeframes above 15m`() {
         val state = ChartUiState(
             symbol = "ETHUSDT",
             contract = FuturesContract("ETHUSDT", "ETHUSDT", "ETH", "USDT", 2, 3, 0.01, "PERPETUAL", "TRADING"),
-            isFullScreen = true
+            activeTimeframe = com.example.domain.model.Timeframe.DEFAULTS.first { it.id == "1H" },
+            preferences = com.example.domain.model.ChartPreferences(showTbtSmc = true, tbtAutoHideOnHtf = true),
+            tbtSmc = com.example.domain.indicator.TbtSmcOutput(
+                backtestReport = com.example.domain.indicator.TbtBacktestReport(
+                    totalTrades = 5,
+                    wins = 3,
+                    losses = 2,
+                    winRate = 60,
+                    netR = 7.0
+                )
+            )
         )
 
         composeTestRule.setContent {
             BinanceProTheme {
-                com.example.ui.chart.FullScreenTimeframeBar(
+                com.example.ui.chart.TbtIndicatorControl(
                     state = state,
-                    onOpenCoinSwitcher = {},
-                    onSelectPriceSource = {},
-                    onSelectTimeframe = {},
-                    onOpenTimeframePicker = {},
-                    onAutoFit = {},
-                    onStartReplay = {},
-                    onToggleTbtSmc = { toggled = true },
-                    onExitFullScreen = {},
-                    modifier = Modifier.size(width = 760.dp, height = 40.dp)
+                    onToggleVisible = {},
+                    onToggleAutoHideOnHtf = {},
+                    onToggleVolImbalanceLine = {},
+                    onToggleZoneTags = {},
+                    onToggleSignals = {},
+                    onToggleZones = {},
+                    onTogglePowerShift = {},
+                    onToggleOverlap = {},
+                    onToggleHud = {},
+                    onUpdateTargetRR = {},
+                    onUpdateSlBufferPct = {},
+                    onToggleReplayMode = {},
+                    onReplayStepBackward = {},
+                    onReplayTogglePlay = {},
+                    onReplayStepForward = {},
+                    onReplaySetSpeed = {},
+                    onReplayReset = {}
                 )
             }
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
-        composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed()
-        assertEquals(true, toggled)
+        composeTestRule.onNodeWithTag("tbt_auto_hidden_badge").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("tbt_backtest_stats").assertDoesNotExist()
     }
 
     @Test
-    fun `portrait fullscreen bar exposes tbt smc controls`() {
-        var toggled = false
+    fun `portrait fullscreen bar exposes coin switcher price selector replay and exit cleanly`() {
+        var replayClicked = false
         val state = ChartUiState(
             symbol = "BTCUSDT",
             contract = FuturesContract("BTCUSDT", "BTCUSDT", "BTC", "USDT", 2, 3, 0.1, "PERPETUAL", "TRADING"),
@@ -673,17 +769,17 @@ class ChartAndWatchlistUiTest {
                     onSelectTimeframe = {},
                     onOpenTimeframePicker = {},
                     onAutoFit = {},
-                    onStartReplay = {},
-                    onToggleTbtSmc = { toggled = true },
+                    onStartReplay = { replayClicked = true },
                     onExitFullScreen = {}
                 )
             }
         }
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
-        composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed()
-        assertEquals(true, toggled)
+        composeTestRule.onNodeWithTag("fullscreen_coin_switcher").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("chart_replay_button").assertIsDisplayed().performClick()
+        composeTestRule.onNodeWithTag("exit_fullscreen_button").assertIsDisplayed()
+        assertEquals(true, replayClicked)
     }
 
     @Test

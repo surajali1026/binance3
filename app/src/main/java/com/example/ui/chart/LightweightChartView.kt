@@ -41,6 +41,7 @@ import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 private class ChartJavascriptBridge(
     var onTap: (Long, Double, String?, String?) -> Unit,
@@ -346,33 +347,35 @@ fun LightweightChartView(
         state.activeTool,
         state.replayState.isPickingStart,
         state.axisQuickAlertPrice,
-        state.preferences.showTbtSmc,
+        state.isTbtEffectivelyVisible,
         state.tbtSmc
     ) {
         val root = JSONObject()
         val lines = JSONArray()
         val alertsArray = JSONArray()
         state.alertsForSymbol.filter { it.isActive }.forEach { alert ->
-            lines.put(JSONObject().apply {
-                put("price", alert.targetPrice)
-                put("title", "")
-                put("color", "#f0b90b")
-                put("dashed", true)
-                put("selected", alert.id == state.selectedAlertId)
-            })
+            val isSelected = alert.id == state.selectedAlertId
             alertsArray.put(JSONObject().apply {
                 put("id", alert.id)
                 put("price", alert.targetPrice)
-                put("selected", alert.id == state.selectedAlertId)
+                put("selected", isSelected)
             })
         }
         state.drawings.filter { it.type == DrawingType.HORIZONTAL_LINE }.forEach { drawing ->
             drawing.points.firstOrNull()?.let { point ->
+                val styleKey = when (drawing.lineStyle) {
+                    LineStyle.SOLID -> "solid"
+                    LineStyle.DASHED -> "dashed"
+                    LineStyle.DOTTED -> "dotted"
+                }
                 lines.put(JSONObject().apply {
                     put("price", point.price)
                     put("title", "")
                     put("color", String.format("#%06X", 0xFFFFFF and drawing.colorHex.toInt()))
+                    put("lineStyle", styleKey)
+                    put("lineWidth", drawing.strokeWidth.roundToInt().coerceIn(1, 4))
                     put("dashed", drawing.lineStyle != LineStyle.SOLID)
+                    put("axisLabelVisible", true)
                     put("selected", drawing.id == state.selectedDrawingId)
                 })
             }
@@ -389,11 +392,18 @@ fun LightweightChartView(
                     put("price", point.price)
                 })
             }
+            val styleKey = when (drawing.lineStyle) {
+                LineStyle.SOLID -> "solid"
+                LineStyle.DASHED -> "dashed"
+                LineStyle.DOTTED -> "dotted"
+            }
             drawingArray.put(JSONObject().apply {
                 put("id", drawing.id)
                 put("type", drawing.type.name)
                 put("locked", drawing.isLocked)
                 put("color", String.format("#%06X", 0xFFFFFF and drawing.colorHex.toInt()))
+                put("lineStyle", styleKey)
+                put("strokeWidth", drawing.strokeWidth.toDouble())
                 put("dashed", drawing.lineStyle != LineStyle.SOLID)
                 put("selected", drawing.id == state.selectedDrawingId)
                 put("points", points)
@@ -433,10 +443,11 @@ fun LightweightChartView(
                 put("label", label)
             })
         }
+        val tbtVisible = state.isTbtEffectivelyVisible
         val tbtObj = JSONObject().apply {
-            put("enabled", state.preferences.showTbtSmc)
+            put("enabled", tbtVisible)
             val mArr = JSONArray()
-            if (state.preferences.showTbtSmc) {
+            if (tbtVisible) {
                 state.tbtSmc.markers.forEach { m ->
                     mArr.put(JSONObject().apply {
                         put("time", m.timeMillis / 1000L)
@@ -449,7 +460,7 @@ fun LightweightChartView(
             }
             put("markers", mArr)
             val pArr = JSONArray()
-            if (state.preferences.showTbtSmc) {
+            if (tbtVisible) {
                 state.tbtSmc.priceLines.forEach { pl ->
                     pArr.put(JSONObject().apply {
                         put("price", pl.price)
@@ -645,10 +656,10 @@ fun LightweightChartView(
         }
     }
 
-    // Explicitly purge all TBT SMC lines & markers in WebView the instant the indicator is hidden
-    LaunchedEffect(chartReady, useFallbackCanvas, state.preferences.showTbtSmc) {
+    // Explicitly purge all TBT SMC lines & markers in WebView the instant the indicator is hidden or auto-hidden on HTF
+    LaunchedEffect(chartReady, useFallbackCanvas, state.isTbtEffectivelyVisible) {
         if (useFallbackCanvas || !chartReady) return@LaunchedEffect
-        if (!state.preferences.showTbtSmc) {
+        if (!state.isTbtEffectivelyVisible) {
             webView?.evaluateJavascript("window.clearTbtSmc && window.clearTbtSmc()", null)
         }
     }

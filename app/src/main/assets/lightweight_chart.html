@@ -677,10 +677,17 @@ body.immersive-landscape{
                 const pts = d.points || [];
                 if(pts.length < 1) continue;
                 const color = d.color || '#f0b90b';
+                const baseWidth = Number(d.strokeWidth) > 0 ? Number(d.strokeWidth) : 2;
                 ctx.strokeStyle = color;
                 ctx.fillStyle = color + '24';
-                ctx.lineWidth = d.selected ? 2.5 : 2;
-                ctx.setLineDash(d.dashed ? [6, 4] : []);
+                ctx.lineWidth = d.selected ? Math.max(2.5, baseWidth + 0.5) : baseWidth;
+                if(d.lineStyle === 'dotted'){
+                    ctx.setLineDash([2.5, 4.5]);
+                } else if(d.lineStyle === 'dashed' || d.dashed){
+                    ctx.setLineDash([7, 5]);
+                } else {
+                    ctx.setLineDash([]);
+                }
 
                 if(d.type === 'HORIZONTAL_LINE'){
                     const y1 = candles.priceToCoordinate(pts[0].price);
@@ -734,21 +741,22 @@ body.immersive-landscape{
                 ctx.setLineDash([]);
             }
 
-            // Selected alert visual drag handle / live drag line
+            // Subtle dotted lines for all active alerts (zero name tag, zero axis clutter)
             for(let i = 0; i < activeAlerts.length; i++){
                 const a = activeAlerts[i];
                 const ay = candles.priceToCoordinate(a.price);
                 if(ay == null) continue;
-                if(a._dragging){
-                    ctx.strokeStyle = '#f0b90b';
-                    ctx.lineWidth = 2;
-                    ctx.setLineDash([5, 5]);
-                    ctx.beginPath();
-                    ctx.moveTo(0, ay);
-                    ctx.lineTo(plotW, ay);
-                    ctx.stroke();
-                    ctx.setLineDash([]);
-                }
+                const emphasized = !!(a.selected || a._dragging);
+                ctx.save();
+                ctx.strokeStyle = emphasized ? 'rgba(240, 185, 11, 0.90)' : 'rgba(240, 185, 11, 0.56)';
+                ctx.lineWidth = emphasized ? 1.8 : 1.25;
+                ctx.lineCap = 'round';
+                ctx.setLineDash([2.5, 5.5]);
+                ctx.beginPath();
+                ctx.moveTo(0, ay);
+                ctx.lineTo(plotW, ay);
+                ctx.stroke();
+                ctx.restore();
                 if(a.selected){
                     drawHandle(26, ay, '#f0b90b');
                 }
@@ -828,6 +836,13 @@ body.immersive-landscape{
             lines = [];
         }
 
+        function mapUserLineStyle(lineObj){
+            if(lineObj.lineStyle === 'dotted') return LightweightCharts.LineStyle.Dotted;
+            if(lineObj.lineStyle === 'dashed') return LightweightCharts.LineStyle.Dashed;
+            if(lineObj.lineStyle === 'solid') return LightweightCharts.LineStyle.Solid;
+            return lineObj.dashed ? LightweightCharts.LineStyle.Dashed : LightweightCharts.LineStyle.Solid;
+        }
+
         function syncLines(lineList){
             const list = Array.isArray(lineList) ? lineList : [];
             const sig = JSON.stringify(list);
@@ -837,14 +852,13 @@ body.immersive-landscape{
             for(let i = 0; i < list.length; i++){
                 const l = list[i];
                 if(Number.isFinite(l.price) && l.price > 0){
+                    const baseWidth = Number(l.lineWidth) > 0 ? Number(l.lineWidth) : 1;
                     lines.push(candles.createPriceLine({
                         price: l.price,
                         color: l.color || '#f0b90b',
-                        lineWidth: l.selected ? 2 : 1,
-                        lineStyle: l.dashed
-                            ? LightweightCharts.LineStyle.Dashed
-                            : LightweightCharts.LineStyle.Solid,
-                        axisLabelVisible: true,
+                        lineWidth: l.selected ? Math.max(2, baseWidth) : baseWidth,
+                        lineStyle: mapUserLineStyle(l),
+                        axisLabelVisible: l.axisLabelVisible !== false,
                         title: ''
                     }));
                 }
@@ -856,20 +870,6 @@ body.immersive-landscape{
                 try{ candles.removePriceLine(tbtPriceLines[i]); }catch(_){}
             }
             tbtPriceLines = [];
-            // Belt-and-suspenders sweep: remove any leftover non-user price lines attached to candles
-            try{
-                if(candles && typeof candles.priceLines === 'function'){
-                    const attached = candles.priceLines();
-                    if(Array.isArray(attached)){
-                        for(let i = 0; i < attached.length; i++){
-                            const pl = attached[i];
-                            if(pl && pl !== quickGuideLine && lines.indexOf(pl) === -1){
-                                try{ candles.removePriceLine(pl); }catch(_){}
-                            }
-                        }
-                    }
-                }
-            }catch(_){}
         }
 
         function setTbtMarkersCompat(markerList){

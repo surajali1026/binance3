@@ -104,7 +104,13 @@ data class ChartPreferences(
     val tbtShowPowerShift: Boolean = true,
     val tbtShowOverlap: Boolean = true,
     val tbtShowSignals: Boolean = true,
-    val tbtShowHud: Boolean = true
+    val tbtShowHud: Boolean = true,
+    val tbtAutoHideOnHtf: Boolean = true,
+    val tbtTargetRR: Double = 3.0,
+    val tbtSlBufferPct: Double = 0.05,
+    val tbtUseKillzone: Boolean = true,
+    val tbtShowVolImbalanceLine: Boolean = true,
+    val tbtShowZoneTags: Boolean = true
 ) {
     fun toTbtSmcConfig(): TbtSmcConfig = TbtSmcConfig(
         swingLen = 5,
@@ -112,7 +118,12 @@ data class ChartPreferences(
         showPowerShift = tbtShowPowerShift,
         showOverlap = tbtShowOverlap,
         showSignals = tbtShowSignals,
-        showHud = tbtShowHud
+        showHud = tbtShowHud,
+        autoHideOnHtf = tbtAutoHideOnHtf,
+        targetRR = tbtTargetRR,
+        slBufferPct = tbtSlBufferPct,
+        showVolImbalanceLine = tbtShowVolImbalanceLine,
+        showZoneTags = tbtShowZoneTags
     )
 }
 

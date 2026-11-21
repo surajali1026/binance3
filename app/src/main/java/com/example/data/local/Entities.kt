@@ -215,7 +215,13 @@ data class ChartPreferencesEntity(
     val tbtShowPowerShift: Boolean = true,
     val tbtShowOverlap: Boolean = true,
     val tbtShowSignals: Boolean = true,
-    val tbtShowHud: Boolean = true
+    val tbtShowHud: Boolean = true,
+    val tbtAutoHideOnHtf: Boolean = true,
+    val tbtTargetRR: Double = 3.0,
+    val tbtSlBufferPct: Double = 0.05,
+    val tbtUseKillzone: Boolean = true,
+    val tbtShowVolImbalanceLine: Boolean = true,
+    val tbtShowZoneTags: Boolean = true
 ) {
     fun toDomain(): ChartPreferences = ChartPreferences(
         lastSymbol = lastSymbol,
@@ -236,7 +242,13 @@ data class ChartPreferencesEntity(
         tbtShowPowerShift = tbtShowPowerShift,
         tbtShowOverlap = tbtShowOverlap,
         tbtShowSignals = tbtShowSignals,
-        tbtShowHud = tbtShowHud
+        tbtShowHud = tbtShowHud,
+        tbtAutoHideOnHtf = tbtAutoHideOnHtf,
+        tbtTargetRR = tbtTargetRR,
+        tbtSlBufferPct = tbtSlBufferPct,
+        tbtUseKillzone = tbtUseKillzone,
+        tbtShowVolImbalanceLine = tbtShowVolImbalanceLine,
+        tbtShowZoneTags = tbtShowZoneTags
     )
 
     companion object {
@@ -260,7 +272,13 @@ data class ChartPreferencesEntity(
             tbtShowPowerShift = prefs.tbtShowPowerShift,
             tbtShowOverlap = prefs.tbtShowOverlap,
             tbtShowSignals = prefs.tbtShowSignals,
-            tbtShowHud = prefs.tbtShowHud
+            tbtShowHud = prefs.tbtShowHud,
+            tbtAutoHideOnHtf = prefs.tbtAutoHideOnHtf,
+            tbtTargetRR = prefs.tbtTargetRR,
+            tbtSlBufferPct = prefs.tbtSlBufferPct,
+            tbtUseKillzone = prefs.tbtUseKillzone,
+            tbtShowVolImbalanceLine = prefs.tbtShowVolImbalanceLine,
+            tbtShowZoneTags = prefs.tbtShowZoneTags
         )
     }
 }
