@@ -291,7 +291,8 @@ class TradingCoreUnitTest {
         val vm = com.example.ui.chart.ChartViewModel(
             appContext = ctx,
             marketRepository = container.marketRepository,
-            chartStateRepository = container.chartStateRepository
+            chartStateRepository = container.chartStateRepository,
+            multiExchangeTradeRepository = container.multiExchangeTradeRepository
         )
 
         // Manually scale price axis (zoomed range)
@@ -325,7 +326,8 @@ class TradingCoreUnitTest {
         val vm = com.example.ui.chart.ChartViewModel(
             appContext = ctx,
             marketRepository = container.marketRepository,
-            chartStateRepository = container.chartStateRepository
+            chartStateRepository = container.chartStateRepository,
+            multiExchangeTradeRepository = container.multiExchangeTradeRepository
         )
         vm.updatePlotWidth(1000f)
 
@@ -412,7 +414,8 @@ class TradingCoreUnitTest {
         val vm = com.example.ui.chart.ChartViewModel(
             appContext = ctx,
             marketRepository = container.marketRepository,
-            chartStateRepository = container.chartStateRepository
+            chartStateRepository = container.chartStateRepository,
+            multiExchangeTradeRepository = container.multiExchangeTradeRepository
         )
 
         val gainersList = listOf("SOLUSDT", "ETHUSDT", "AVAXUSDT")
@@ -806,5 +809,162 @@ class TradingCoreUnitTest {
         )
         assertEquals(8, swingCascade.snapshots.size)
         assertEquals(com.example.domain.indicator.TbtCascadeAction.BUY_READY, swingCascade.action)
+    }
+
+    @Test
+    fun `multi exchange volume engine aggregates checked exchanges detects buyer and seller traps and honors toggles`() {
+        // 1. Default checked core exchanges match specification
+        val defaults = com.example.domain.indicator.SupportedExchange.DEFAULT_SELECTED
+        assertEquals(
+            setOf(
+                com.example.domain.indicator.SupportedExchange.BINANCE,
+                com.example.domain.indicator.SupportedExchange.BYBIT,
+                com.example.domain.indicator.SupportedExchange.OKX,
+                com.example.domain.indicator.SupportedExchange.BITGET,
+                com.example.domain.indicator.SupportedExchange.HYPERLIQUID,
+                com.example.domain.indicator.SupportedExchange.DYDX
+            ),
+            defaults
+        )
+
+        val baseTime = 1_750_000_000_000L
+        val step = 900_000L // 15m
+
+        // Candle 0: Long upper wick & bearish close -> Buyer Trap candidate (high=110, low=100, open=104, close=101)
+        val buyerTrapCandle = Candle(
+            openTime = baseTime,
+            closeTime = baseTime + step - 1L,
+            open = 104.0,
+            high = 110.0,
+            low = 100.0,
+            close = 101.0,
+            volume = 5000.0,
+            isClosed = true
+        )
+        // Candle 1: Long lower wick & bullish rebound close -> Seller Trap candidate (low=95, high=105, open=101, close=104)
+        val sellerTrapCandle = Candle(
+            openTime = baseTime + step,
+            closeTime = baseTime + 2 * step - 1L,
+            open = 101.0,
+            high = 105.0,
+            low = 95.0,
+            close = 104.0,
+            volume = 5200.0,
+            isClosed = true
+        )
+
+        fun tick(
+            ex: com.example.domain.indicator.SupportedExchange,
+            price: Double,
+            quoteVol: Double,
+            isBuy: Boolean,
+            ts: Long
+        ) = com.example.domain.indicator.ExchangeTradeTick(
+            exchange = ex,
+            price = price,
+            baseQty = quoteVol / price,
+            quoteQty = quoteVol,
+            isBuyAggressor = isBuy,
+            timestampMillis = ts
+        )
+
+        // 3 checked exchanges aggressively BUYING at top bucket (107.5..110.0) of Candle 0 + 1 unchecked (COINBASE) ignored
+        // 4 checked exchanges aggressively SELLING at bottom bucket (95.0..97.5) of Candle 1
+        val tradesMap = mapOf(
+            com.example.domain.indicator.SupportedExchange.BINANCE to listOf(
+                tick(com.example.domain.indicator.SupportedExchange.BINANCE, 109.0, 400_000.0, true, baseTime + 60_000L),
+                tick(com.example.domain.indicator.SupportedExchange.BINANCE, 109.0, 50_000.0, false, baseTime + 70_000L),
+                tick(com.example.domain.indicator.SupportedExchange.BINANCE, 96.0, 450_000.0, false, baseTime + step + 60_000L)
+            ),
+            com.example.domain.indicator.SupportedExchange.BYBIT to listOf(
+                tick(com.example.domain.indicator.SupportedExchange.BYBIT, 108.8, 300_000.0, true, baseTime + 65_000L),
+                tick(com.example.domain.indicator.SupportedExchange.BYBIT, 96.2, 350_000.0, false, baseTime + step + 65_000L)
+            ),
+            com.example.domain.indicator.SupportedExchange.OKX to listOf(
+                tick(com.example.domain.indicator.SupportedExchange.OKX, 109.2, 250_000.0, true, baseTime + 75_000L),
+                tick(com.example.domain.indicator.SupportedExchange.OKX, 95.8, 280_000.0, false, baseTime + step + 75_000L)
+            ),
+            com.example.domain.indicator.SupportedExchange.HYPERLIQUID to listOf(
+                tick(com.example.domain.indicator.SupportedExchange.HYPERLIQUID, 96.1, 220_000.0, false, baseTime + step + 85_000L)
+            ),
+            com.example.domain.indicator.SupportedExchange.COINBASE to listOf(
+                tick(com.example.domain.indicator.SupportedExchange.COINBASE, 109.1, 900_000.0, true, baseTime + 80_000L)
+            )
+        )
+
+        val snapshot = com.example.domain.indicator.ExchangeVolumeSnapshot(
+            symbol = "BTCUSDT",
+            timeframeId = "15m",
+            tradesByExchange = tradesMap,
+            connectedExchanges = tradesMap.keys
+        )
+
+        val out = com.example.domain.indicator.MultiExchangeVolumeEngine.calculate(
+            candles = listOf(buyerTrapCandle, sellerTrapCandle),
+            snapshot = snapshot,
+            selectedExchanges = defaults,
+            showTraps = true
+        )
+
+        // Candle 0 top level: 3 green checked exchanges (Coinbase was unchecked so NOT counted)
+        val c0Level = out.levels.first { it.candleTimeMillis == buyerTrapCandle.openTime }
+        assertEquals(com.example.domain.indicator.DominanceSide.BUY, c0Level.dominantSide)
+        assertEquals(3, c0Level.dominantExchangeCount)
+        assertTrue(c0Level.exchanges.none { it.exchange == com.example.domain.indicator.SupportedExchange.COINBASE })
+
+        // Candle 1 bottom level: 4 red checked exchanges
+        val c1Level = out.levels.first { it.candleTimeMillis == sellerTrapCandle.openTime }
+        assertEquals(com.example.domain.indicator.DominanceSide.SELL, c1Level.dominantSide)
+        assertEquals(4, c1Level.dominantExchangeCount)
+
+        // Both Buyer Trap & Seller Trap detected
+        assertTrue(out.traps.any { it.type == com.example.domain.indicator.TrapType.BUYER_TRAP })
+        assertTrue(out.traps.any { it.type == com.example.domain.indicator.TrapType.SELLER_TRAP })
+
+        // Trap toggle OFF suppresses all trap tags while keeping level counts intact
+        val noTrapsOut = com.example.domain.indicator.MultiExchangeVolumeEngine.calculate(
+            candles = listOf(buyerTrapCandle, sellerTrapCandle),
+            snapshot = snapshot,
+            selectedExchanges = defaults,
+            showTraps = false
+        )
+        assertTrue(noTrapsOut.traps.isEmpty())
+        assertEquals(2, noTrapsOut.levels.size)
+    }
+
+    @Test
+    fun `github auto update version comparator and release json parser select apk asset cleanly`() {
+        assertTrue(com.example.config.AppVersionConfig.isNewerVersion("v1.1.0", "1.0"))
+        assertTrue(com.example.config.AppVersionConfig.isNewerVersion("2.0.0", "1.9.9"))
+        assertFalse(com.example.config.AppVersionConfig.isNewerVersion("v1.0.0", "1.0"))
+        assertFalse(com.example.config.AppVersionConfig.isNewerVersion("0.9.5", "1.0"))
+        assertTrue(com.example.config.AppVersionConfig.isNewerVersion("1.0.1", "1.0.0"))
+        assertEquals(
+            "https://api.github.com/repos/surajali1026/binance3/releases/latest",
+            com.example.config.AppVersionConfig.LATEST_RELEASE_URL
+        )
+
+        val sampleReleaseJson = """
+            {
+              "tag_name": "v2.1.0",
+              "name": "Binance Pro v2.1.0",
+              "html_url": "https://github.com/surajali1026/binance3/releases/tag/v2.1.0",
+              "body": "## What's New\n- Added Multi-Exch Vol & Traps\n- Faster chart sync",
+              "assets": [
+                {"name": "checksums.txt", "browser_download_url": "https://github.com/surajali1026/binance3/releases/download/v2.1.0/checksums.txt"},
+                {"name": "binance-pro-v2.1.0.apk", "browser_download_url": "https://github.com/surajali1026/binance3/releases/download/v2.1.0/binance-pro-v2.1.0.apk"}
+              ]
+            }
+        """.trimIndent()
+
+        val parsed = com.example.data.remote.GitHubUpdateChecker.parseReleaseJson(sampleReleaseJson)
+        assertNotNull(parsed)
+        assertEquals("v2.1.0", parsed!!.tagName)
+        assertEquals("2.1.0", parsed.version)
+        assertEquals(
+            "https://github.com/surajali1026/binance3/releases/download/v2.1.0/binance-pro-v2.1.0.apk",
+            parsed.downloadUrl
+        )
+        assertTrue(parsed.notesSummary.contains("Multi-Exch Vol & Traps"))
     }
 }

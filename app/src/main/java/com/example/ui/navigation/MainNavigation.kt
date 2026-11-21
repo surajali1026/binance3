@@ -45,11 +45,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.runtime.rememberCoroutineScope
 import com.example.AppContainer
+import com.example.data.remote.UpdateCheckState
 import com.example.ui.chart.AlertsManagerSheet
 import com.example.ui.chart.ChartScreen
 import com.example.ui.chart.ChartViewModel
 import com.example.ui.chart.CreateAlertSheet
+import com.example.ui.components.UpdatePromptBanner
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.BorderSubtle
 import com.example.ui.theme.CanvasVoid
@@ -57,6 +62,7 @@ import com.example.ui.theme.ElevatedSurface
 import com.example.ui.theme.TextMuted
 import com.example.ui.watchlist.WatchlistScreen
 import com.example.ui.watchlist.WatchlistViewModel
+import kotlinx.coroutines.launch
 
 enum class MainTab {
     WATCHLIST,
@@ -78,8 +84,21 @@ fun MainNavigation(
     )
 
     val chartState by chartViewModel.uiState.collectAsStateWithLifecycle()
+    val updateCheckState by container.gitHubUpdateChecker.state.collectAsStateWithLifecycle()
+    val dismissedUpdateTag by container.gitHubUpdateChecker.dismissedTag.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
     var showAlertsFromWatchlist by remember { mutableStateOf(false) }
     var showQuickAlertFromWatchlist by remember { mutableStateOf(false) }
+
+    val triggerManualUpdateCheck: () -> Unit = {
+        scope.launch {
+            container.gitHubUpdateChecker.checkForUpdates(isManual = true)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        container.gitHubUpdateChecker.checkOnStartupIfNeeded()
+    }
 
     var activeTab by rememberSaveable {
         mutableStateOf(
@@ -139,7 +158,9 @@ fun MainNavigation(
                         viewModel = chartViewModel,
                         showBackButton = false,
                         onBackToWatchlist = {},
-                        applyBottomInset = true
+                        applyBottomInset = true,
+                        updateCheckState = updateCheckState,
+                        onCheckForUpdates = triggerManualUpdateCheck
                     )
                 }
             }
@@ -178,7 +199,9 @@ fun MainNavigation(
                                 viewModel = chartViewModel,
                                 showBackButton = isPhoneLandscape,
                                 onBackToWatchlist = { activeTab = MainTab.WATCHLIST },
-                                applyBottomInset = false
+                                applyBottomInset = false,
+                                updateCheckState = updateCheckState,
+                                onCheckForUpdates = triggerManualUpdateCheck
                             )
                         }
                     }
@@ -193,6 +216,19 @@ fun MainNavigation(
                     )
                 }
             }
+        }
+
+        // Dismissible GitHub Auto-Update Banner (surajali1026/binance3)
+        val availableRelease = (updateCheckState as? UpdateCheckState.UpdateAvailable)?.release
+        if (availableRelease != null && dismissedUpdateTag != availableRelease.tagName) {
+            UpdatePromptBanner(
+                release = availableRelease,
+                onDismiss = { container.gitHubUpdateChecker.dismissBanner(availableRelease.tagName) },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            )
         }
     }
 

@@ -54,6 +54,7 @@ private class ChartJavascriptBridge(
     var onMoveWholeDrawing: (String, Long, Double) -> Unit,
     var onMoveAlertPrice: (String, Double) -> Unit,
     var onManualInteraction: () -> Unit,
+    var onMultiExchLevelTap: (String) -> Unit,
     var onChartReady: () -> Unit,
     var onLibraryLoadFailed: (String) -> Unit,
     var onErrorReport: (String) -> Unit
@@ -125,6 +126,11 @@ private class ChartJavascriptBridge(
     @JavascriptInterface
     fun onManualInteraction() {
         mainHandler.post { onManualInteraction() }
+    }
+
+    @JavascriptInterface
+    fun onMultiExchLevelTap(levelId: String) {
+        mainHandler.post { onMultiExchLevelTap(levelId) }
     }
 
     @JavascriptInterface
@@ -254,6 +260,7 @@ fun LightweightChartView(
     onMoveWholeDrawing: (String, Long, Double) -> Unit = { _, _, _ -> },
     onMoveAlertPrice: (String, Double) -> Unit = { _, _ -> },
     onManualInteraction: () -> Unit,
+    onMultiExchLevelTap: (String) -> Unit = {},
     isImmersive: Boolean = false,
     fallbackCanvas: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -269,6 +276,7 @@ fun LightweightChartView(
     val latestOnMoveWholeDrawing by rememberUpdatedState(onMoveWholeDrawing)
     val latestOnMoveAlertPrice by rememberUpdatedState(onMoveAlertPrice)
     val latestOnManualInteraction by rememberUpdatedState(onManualInteraction)
+    val latestOnMultiExchLevelTap by rememberUpdatedState(onMultiExchLevelTap)
     val latestBuildFullHistory by rememberUpdatedState(buildFullHistory)
 
     var webView by remember { mutableStateOf<WebView?>(null) }
@@ -288,6 +296,7 @@ fun LightweightChartView(
             onMoveWholeDrawing = { _, _, _ -> },
             onMoveAlertPrice = { _, _ -> },
             onManualInteraction = { },
+            onMultiExchLevelTap = { },
             onChartReady = { },
             onLibraryLoadFailed = { },
             onErrorReport = { }
@@ -323,6 +332,7 @@ fun LightweightChartView(
     bridge.onMoveWholeDrawing = { id, dt, dp -> latestOnMoveWholeDrawing(id, dt, dp) }
     bridge.onMoveAlertPrice = { id, p -> latestOnMoveAlertPrice(id, p) }
     bridge.onManualInteraction = { latestOnManualInteraction() }
+    bridge.onMultiExchLevelTap = { levelId -> latestOnMultiExchLevelTap(levelId) }
     bridge.onChartReady = {
         useFallbackCanvas = false
         chartReady = true
@@ -348,7 +358,10 @@ fun LightweightChartView(
         state.replayState.isPickingStart,
         state.axisQuickAlertPrice,
         state.isTbtEffectivelyVisible,
-        state.tbtSmc
+        state.tbtSmc,
+        state.preferences.showMultiExchVol,
+        state.multiExchVol,
+        state.selectedMultiExchLevelId
     ) {
         val root = JSONObject()
         val lines = JSONArray()
@@ -475,6 +488,36 @@ fun LightweightChartView(
             put("zones", JSONArray())
         }
         root.put("tbtSmc", tbtObj)
+
+        val multiExchEnabled = state.preferences.showMultiExchVol
+        val meObj = JSONObject().apply {
+            put("enabled", multiExchEnabled)
+            put("selectedId", state.selectedMultiExchLevelId ?: "")
+            val lvlArr = JSONArray()
+            val trapArr = JSONArray()
+            if (multiExchEnabled) {
+                state.multiExchVol.levels.forEach { lvl ->
+                    lvlArr.put(JSONObject().apply {
+                        put("id", lvl.id)
+                        put("time", lvl.candleTimeMillis / 1000L)
+                        put("price", lvl.priceMid)
+                        put("side", lvl.dominantSide.name)
+                        put("count", lvl.dominantExchangeCount)
+                    })
+                }
+                state.multiExchVol.traps.forEach { trap ->
+                    trapArr.put(JSONObject().apply {
+                        put("id", trap.id)
+                        put("time", trap.candleTimeMillis / 1000L)
+                        put("price", trap.price)
+                        put("type", trap.type.name)
+                    })
+                }
+            }
+            put("levels", lvlArr)
+            put("traps", trapArr)
+        }
+        root.put("multiExchVol", meObj)
         root.toString()
     }
     val latestOverlayJson by rememberUpdatedState(overlayJson)
@@ -661,6 +704,14 @@ fun LightweightChartView(
         if (useFallbackCanvas || !chartReady) return@LaunchedEffect
         if (!state.isTbtEffectivelyVisible) {
             webView?.evaluateJavascript("window.clearTbtSmc && window.clearTbtSmc()", null)
+        }
+    }
+
+    // Explicitly purge all Multi-Exch Vol & Traps markers/traps without touching TBT SMC when hidden
+    LaunchedEffect(chartReady, useFallbackCanvas, state.preferences.showMultiExchVol) {
+        if (useFallbackCanvas || !chartReady) return@LaunchedEffect
+        if (!state.preferences.showMultiExchVol) {
+            webView?.evaluateJavascript("window.clearMultiExchVol && window.clearMultiExchVol()", null)
         }
     }
 

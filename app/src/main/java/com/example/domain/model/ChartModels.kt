@@ -111,7 +111,11 @@ data class ChartPreferences(
     val tbtUseKillzone: Boolean = false,
     val tbtShowVolImbalanceLine: Boolean = true,
     val tbtShowZoneTags: Boolean = true,
-    val tbtMtfProfile: com.example.domain.indicator.TbtMtfProfile = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H
+    val tbtMtfProfile: com.example.domain.indicator.TbtMtfProfile = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H,
+    val showMultiExchVol: Boolean = true,
+    val multiExchShowTraps: Boolean = true,
+    val multiExchSelectedExchanges: Set<com.example.domain.indicator.SupportedExchange> =
+        com.example.domain.indicator.SupportedExchange.DEFAULT_SELECTED
 ) {
     fun toTbtSmcConfig(): TbtSmcConfig = TbtSmcConfig(
         swingLen = 5,

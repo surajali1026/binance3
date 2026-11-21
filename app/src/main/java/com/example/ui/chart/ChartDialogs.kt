@@ -65,6 +65,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.config.AppVersionConfig
+import com.example.data.remote.UpdateCheckState
 import com.example.domain.model.AlertCondition
 import com.example.domain.model.ChartDrawing
 import com.example.domain.model.ChartPreferences
@@ -956,6 +958,8 @@ fun ChartSettingsSheet(
     preferences: ChartPreferences,
     onUpdatePreferences: ((ChartPreferences) -> ChartPreferences) -> Unit,
     onTestAlertSound: () -> Unit = {},
+    updateCheckState: UpdateCheckState = UpdateCheckState.Idle,
+    onCheckForUpdates: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val bullChoices = listOf(0xFF0ECB81L, 0xFF22C55EL, 0xFF38BDF8L)
@@ -1062,6 +1066,52 @@ fun ChartSettingsSheet(
             }
             SettingToggleRow("Alert Vibration", preferences.vibrationEnabled) { v ->
                 onUpdatePreferences { it.copy(vibrationEnabled = v) }
+            }
+
+            HorizontalDivider(color = BorderSubtle, thickness = 0.75.dp)
+
+            // App Version & GitHub Auto-Update Checker (surajali1026/binance3)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Binance Pro v${AppVersionConfig.CURRENT_VERSION}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    val statusText = when (updateCheckState) {
+                        is UpdateCheckState.Checking -> "Checking GitHub releases..."
+                        is UpdateCheckState.UpToDate -> "Up to date (${AppVersionConfig.GITHUB_OWNER}/${AppVersionConfig.GITHUB_REPO})"
+                        is UpdateCheckState.UpdateAvailable -> "New v${updateCheckState.release.version} available"
+                        is UpdateCheckState.Error -> updateCheckState.message
+                        UpdateCheckState.Idle -> "GitHub: ${AppVersionConfig.GITHUB_OWNER}/${AppVersionConfig.GITHUB_REPO}"
+                    }
+                    val statusColor = when (updateCheckState) {
+                        is UpdateCheckState.UpdateAvailable -> BullishGreen
+                        is UpdateCheckState.Error -> BearishRed
+                        else -> TextMuted
+                    }
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = statusColor,
+                        fontSize = 11.sp
+                    )
+                }
+                TextButton(
+                    onClick = onCheckForUpdates,
+                    enabled = updateCheckState !is UpdateCheckState.Checking,
+                    modifier = Modifier.testTag("check_updates_button")
+                ) {
+                    Text(
+                        text = if (updateCheckState is UpdateCheckState.Checking) "Checking..." else "Check for Updates",
+                        color = AmberGold,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

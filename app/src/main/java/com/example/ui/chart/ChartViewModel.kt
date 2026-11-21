@@ -28,6 +28,12 @@ import com.example.domain.model.PriceRangeMeasurement
 import com.example.domain.model.PriceSource
 import com.example.domain.model.TickerSnapshot
 import com.example.domain.model.Timeframe
+import com.example.data.remote.MultiExchangeTradeRepository
+import com.example.domain.indicator.ExchangeVolumeSnapshot
+import com.example.domain.indicator.IntraCandleVolumeLevel
+import com.example.domain.indicator.MultiExchangeVolumeEngine
+import com.example.domain.indicator.MultiExchangeVolumeOutput
+import com.example.domain.indicator.SupportedExchange
 import com.example.domain.indicator.TbtMtfProfile
 import com.example.domain.indicator.TbtSmcEngine
 import com.example.domain.indicator.TbtSmcOutput
@@ -126,11 +132,21 @@ data class ChartUiState(
     val replayState: BarReplayState = BarReplayState(),
     val preferences: ChartPreferences = ChartPreferences(),
     val tbtSmc: TbtSmcOutput = TbtSmcOutput.EMPTY,
+    val multiExchVol: MultiExchangeVolumeOutput = MultiExchangeVolumeOutput.EMPTY,
+    val selectedMultiExchLevelId: String? = null,
+    val multiExchCollapseSignal: Int = 0,
     val isFullScreen: Boolean = false,
     val switcherItems: List<WatchlistItem> = emptyList(),
     val navigationSymbols: List<String> = emptyList(),
     val navigationContextLabel: String = "All"
 ) {
+    val selectedMultiExchLevel: IntraCandleVolumeLevel?
+        get() = if (preferences.showMultiExchVol && selectedMultiExchLevelId != null) {
+            multiExchVol.levels.firstOrNull { it.id == selectedMultiExchLevelId }
+        } else {
+            null
+        }
+
     val canCycleSymbols: Boolean
         get() = navigationSymbols.size > 1
 
@@ -158,7 +174,8 @@ data class ChartUiState(
 class ChartViewModel(
     private val appContext: Context,
     private val marketRepository: MarketRepository,
-    private val chartStateRepository: ChartStateRepository
+    private val chartStateRepository: ChartStateRepository,
+    private val multiExchangeTradeRepository: MultiExchangeTradeRepository
 ) : ViewModel() {
 
     private data class CandleSeriesData(
@@ -198,11 +215,16 @@ class ChartViewModel(
     private val _navigationContextSymbols = MutableStateFlow<List<String>>(emptyList())
     val navigationContextSymbolsState: StateFlow<List<String>> = _navigationContextSymbols.asStateFlow()
     private val _navigationContextLabel = MutableStateFlow("All")
+    private val _multiExchSnapshot = MutableStateFlow(ExchangeVolumeSnapshot.EMPTY)
+    private val _isLoadingMultiExch = MutableStateFlow(false)
+    private val _selectedMultiExchLevelId = MutableStateFlow<String?>(null)
+    private val _multiExchCollapseSignal = MutableStateFlow(0)
 
     @Volatile
     private var cachedTimeframes: List<Timeframe> = Timeframe.DEFAULTS
     private var klineStreamJob: Job? = null
     private var mtfFetchJob: Job? = null
+    private var multiExchFeedJob: Job? = null
     private var replayJob: Job? = null
     private var countdownJob: Job? = null
     private var drawingsJob: Job? = null
@@ -425,6 +447,54 @@ class ChartViewModel(
         }
     }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
+    private data class IndicatorOutputsSlice(
+        val tbtSmc: TbtSmcOutput,
+        val multiExchVol: MultiExchangeVolumeOutput,
+        val selectedLevelId: String?,
+        val collapseSignal: Int
+    )
+
+    private val multiExchVolFlow: Flow<MultiExchangeVolumeOutput> = combine(
+        _candleSeries,
+        _replayState,
+        _multiExchSnapshot,
+        _isLoadingMultiExch,
+        chartStateRepository.preferences
+    ) { series, replay, snapshot, loading, prefs ->
+        if (!prefs.showMultiExchVol || series.candles.isEmpty()) {
+            MultiExchangeVolumeOutput.EMPTY
+        } else {
+            val candles = series.candles
+            val displayed = if (replay.isActive && replay.cutoffIndex in candles.indices) {
+                candles.subList(0, replay.cutoffIndex + 1)
+            } else {
+                candles
+            }
+            val activeSym = series.seriesKey.substringBefore('_')
+            val effectiveSnapshot = if (snapshot.symbol.equals(activeSym, ignoreCase = true)) {
+                snapshot
+            } else {
+                ExchangeVolumeSnapshot.EMPTY
+            }
+            MultiExchangeVolumeEngine.calculate(
+                candles = displayed,
+                snapshot = effectiveSnapshot,
+                selectedExchanges = prefs.multiExchSelectedExchanges,
+                showTraps = prefs.multiExchShowTraps,
+                isLoading = loading
+            )
+        }
+    }.distinctUntilChanged().flowOn(Dispatchers.Default)
+
+    private val indicatorsSliceFlow: Flow<IndicatorOutputsSlice> = combine(
+        tbtSmcFlow,
+        multiExchVolFlow,
+        _selectedMultiExchLevelId,
+        _multiExchCollapseSignal
+    ) { tbt, multi, selLevelId, collapseSig ->
+        IndicatorOutputsSlice(tbt, multi, selLevelId, collapseSig)
+    }
+
     val uiState: StateFlow<ChartUiState> = combine(
         coreMarketFlow,
         interactionFlow,
@@ -442,7 +512,7 @@ class ChartViewModel(
         chartStateRepository.alertHistory,
         chartStateRepository.preferences,
         switcherItemsFlow,
-        tbtSmcFlow
+        indicatorsSliceFlow
     ) { arr ->
         val market = arr[0] as CoreMarketSlice
         val ui = arr[1] as InteractionSlice
@@ -460,7 +530,7 @@ class ChartViewModel(
         val prefs = arr[9] as ChartPreferences
         @Suppress("UNCHECKED_CAST")
         val switcherItems = arr[10] as List<WatchlistItem>
-        val tbtSmc = arr[11] as TbtSmcOutput
+        val indicators = arr[11] as IndicatorOutputsSlice
 
         val activeTf = market.allTfs.firstOrNull { it.id == market.tfId }
             ?: market.allTfs.firstOrNull { it.id == "15m" }
@@ -502,7 +572,10 @@ class ChartViewModel(
             rangeMeasurement = ui.rangeMeasure,
             replayState = ui.replay,
             preferences = prefs,
-            tbtSmc = tbtSmc,
+            tbtSmc = indicators.tbtSmc,
+            multiExchVol = indicators.multiExchVol,
+            selectedMultiExchLevelId = indicators.selectedLevelId,
+            multiExchCollapseSignal = indicators.collapseSignal,
             isFullScreen = ui.isFullScreen,
             switcherItems = switcherItems,
             navigationSymbols = navSymbols,
@@ -554,6 +627,37 @@ class ChartViewModel(
                         refreshMultiTimeframeContext(sym, src, profile)
                     }
                 }
+        }
+        // Connect ONLY to checked exchanges when Multi-Exch Vol & Traps is visible
+        viewModelScope.launch {
+            combine(
+                _symbol,
+                _timeframeId,
+                chartStateRepository.preferences
+                    .map { it.showMultiExchVol to it.multiExchSelectedExchanges }
+                    .distinctUntilChanged()
+            ) { sym, tfId, (enabled, selected) ->
+                Triple(sym, tfId, enabled to selected)
+            }.distinctUntilChanged().collect { (sym, tfId, config) ->
+                val (enabled, selected) = config
+                multiExchFeedJob?.cancel()
+                _selectedMultiExchLevelId.value = null
+                if (!enabled || selected.isEmpty() || sym.isBlank()) {
+                    _isLoadingMultiExch.value = false
+                    _multiExchSnapshot.value = ExchangeVolumeSnapshot.EMPTY
+                } else {
+                    val tf = resolveMtfTimeframe(tfId)
+                    _isLoadingMultiExch.value = true
+                    multiExchFeedJob = viewModelScope.launch {
+                        multiExchangeTradeRepository
+                            .observeExchangeVolumes(sym, tf, selected)
+                            .collect { snap ->
+                                _multiExchSnapshot.value = snap
+                                _isLoadingMultiExch.value = false
+                            }
+                    }
+                }
+            }
         }
     }
 
@@ -1156,6 +1260,7 @@ class ChartViewModel(
     }
 
     fun onChartManualInteraction() {
+        notifyOutsideChartTap()
         if (_viewport.value.isAutoFit) {
             _viewport.update { it.copy(isAutoFit = false) }
         }
@@ -1228,6 +1333,7 @@ class ChartViewModel(
     }
 
     fun handleChartTap(point: ChartPoint, tappedDrawing: ChartDrawing?, tappedAlert: PriceAlert?, tappedIndex: Int) {
+        notifyOutsideChartTap()
         if (_replayState.value.isPickingStart) {
             val safeIdx = tappedIndex.coerceIn(0, (_candleSeries.value.candles.size - 1).coerceAtLeast(0))
             _replayState.value = BarReplayState(
@@ -1737,6 +1843,52 @@ class ChartViewModel(
         updatePreferences { it.copy(tbtMtfProfile = profile) }
     }
 
+    // Standalone Multi-Exch Vol & Traps Indicator Actions (completely independent from TBT SMC)
+    fun toggleMultiExchVol() {
+        val nextShow = !uiState.value.preferences.showMultiExchVol
+        if (!nextShow) {
+            _selectedMultiExchLevelId.value = null
+            _multiExchSnapshot.value = ExchangeVolumeSnapshot.EMPTY
+        }
+        updatePreferences { it.copy(showMultiExchVol = nextShow) }
+    }
+
+    fun toggleMultiExchShowTraps() {
+        updatePreferences { it.copy(multiExchShowTraps = !it.multiExchShowTraps) }
+    }
+
+    fun toggleMultiExchExchange(exchange: SupportedExchange) {
+        updatePreferences { prefs ->
+            val next = if (prefs.multiExchSelectedExchanges.contains(exchange)) {
+                prefs.multiExchSelectedExchanges - exchange
+            } else {
+                prefs.multiExchSelectedExchanges + exchange
+            }
+            prefs.copy(multiExchSelectedExchanges = next)
+        }
+    }
+
+    fun resetDefaultMultiExchExchanges() {
+        updatePreferences { it.copy(multiExchSelectedExchanges = SupportedExchange.DEFAULT_SELECTED) }
+    }
+
+    fun selectMultiExchLevel(levelId: String) {
+        if (!uiState.value.preferences.showMultiExchVol) return
+        _multiExchCollapseSignal.update { it + 1 }
+        _selectedMultiExchLevelId.update { current ->
+            if (current == levelId) null else levelId
+        }
+    }
+
+    fun dismissMultiExchLevelPopup() {
+        _selectedMultiExchLevelId.value = null
+    }
+
+    fun notifyOutsideChartTap() {
+        _selectedMultiExchLevelId.value = null
+        _multiExchCollapseSignal.update { it + 1 }
+    }
+
     fun jumpToMtfTimeframe(tfId: String) {
         val existing = cachedTimeframes.firstOrNull { it.id.equals(tfId, ignoreCase = true) }
             ?: Timeframe.DEFAULTS.firstOrNull { it.id.equals(tfId, ignoreCase = true) }
@@ -1789,6 +1941,7 @@ class ChartViewModel(
         unsubscribeTickers = null
         klineStreamJob?.cancel()
         mtfFetchJob?.cancel()
+        multiExchFeedJob?.cancel()
         replayJob?.cancel()
         countdownJob?.cancel()
         super.onCleared()
@@ -1802,7 +1955,8 @@ class ChartViewModel(
                     return ChartViewModel(
                         context.applicationContext,
                         container.marketRepository,
-                        container.chartStateRepository
+                        container.chartStateRepository,
+                        container.multiExchangeTradeRepository
                     ) as T
                 }
             }

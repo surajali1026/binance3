@@ -56,7 +56,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.compose.foundation.layout.Arrangement
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.remote.UpdateCheckState
 import com.example.domain.model.ChartDrawing
 import com.example.domain.model.DrawingTool
 import com.example.ui.theme.AmberGold
@@ -74,6 +76,8 @@ fun ChartScreen(
     showBackButton: Boolean,
     onBackToWatchlist: () -> Unit,
     applyBottomInset: Boolean = true,
+    updateCheckState: UpdateCheckState = UpdateCheckState.Idle,
+    onCheckForUpdates: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -227,6 +231,7 @@ fun ChartScreen(
                 onMoveWholeDrawing = viewModel::moveWholeDrawing,
                 onMoveAlertPrice = viewModel::moveAlertPrice,
                 onManualInteraction = viewModel::onChartManualInteraction,
+                onMultiExchLevelTap = viewModel::selectMultiExchLevel,
                 isImmersive = isImmersive,
                 fallbackCanvas = {
                     ChartCanvas(
@@ -262,40 +267,69 @@ fun ChartScreen(
                     .padding(start = 8.dp)
             )
 
-            // Top-Left TradingView-style Compact TBT SMC Tag, Buy/Sell Setup Card & Settings Panel
+            // Top-Left Indicator Stack: TBT SMC followed directly below by standalone Multi-Exch Vol & Traps
             val tbtTopOffset = if (state.crosshair.isActive) 50.dp else 8.dp
-            TbtIndicatorControl(
-                state = state,
-                onToggleVisible = viewModel::toggleTbtSmc,
-                onToggleAutoHideOnHtf = viewModel::toggleTbtAutoHideOnHtf,
-                onToggleVolImbalanceLine = viewModel::toggleTbtVolImbalanceLine,
-                onToggleZoneTags = viewModel::toggleTbtZoneTags,
-                onToggleSignals = viewModel::toggleTbtSignals,
-                onToggleZones = viewModel::toggleTbtZones,
-                onTogglePowerShift = viewModel::toggleTbtPowerShift,
-                onToggleOverlap = viewModel::toggleTbtOverlap,
-                onToggleHud = viewModel::toggleTbtHud,
-                onUpdateTargetRR = viewModel::updateTbtTargetRR,
-                onUpdateSlBufferPct = viewModel::updateTbtSlBufferPct,
-                onToggleReplayMode = viewModel::toggleReplayMode,
-                onReplayStepBackward = viewModel::stepReplayBackward,
-                onReplayTogglePlay = viewModel::toggleReplayPlayPause,
-                onReplayStepForward = viewModel::stepReplayForward,
-                onReplaySetSpeed = viewModel::setReplaySpeed,
-                onReplayReset = viewModel::resetReplay,
-                onSelectMtfProfile = viewModel::selectMtfProfile,
-                onCreateEntryAlert = { setup, useRetrace ->
-                    ensureNotificationPermission()
-                    viewModel.createTbtEntryAlert(setup, useRetrace)
-                },
-                onCreateSlTpAlerts = { setup ->
-                    ensureNotificationPermission()
-                    viewModel.createTbtSlTpAlerts(setup)
-                },
+            Column(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(top = tbtTopOffset, start = 8.dp)
-            )
+                    .padding(top = tbtTopOffset, start = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                TbtIndicatorControl(
+                    state = state,
+                    onToggleVisible = viewModel::toggleTbtSmc,
+                    onToggleAutoHideOnHtf = viewModel::toggleTbtAutoHideOnHtf,
+                    onToggleVolImbalanceLine = viewModel::toggleTbtVolImbalanceLine,
+                    onToggleZoneTags = viewModel::toggleTbtZoneTags,
+                    onToggleSignals = viewModel::toggleTbtSignals,
+                    onToggleZones = viewModel::toggleTbtZones,
+                    onTogglePowerShift = viewModel::toggleTbtPowerShift,
+                    onToggleOverlap = viewModel::toggleTbtOverlap,
+                    onToggleHud = viewModel::toggleTbtHud,
+                    onUpdateTargetRR = viewModel::updateTbtTargetRR,
+                    onUpdateSlBufferPct = viewModel::updateTbtSlBufferPct,
+                    onToggleReplayMode = viewModel::toggleReplayMode,
+                    onReplayStepBackward = viewModel::stepReplayBackward,
+                    onReplayTogglePlay = viewModel::toggleReplayPlayPause,
+                    onReplayStepForward = viewModel::stepReplayForward,
+                    onReplaySetSpeed = viewModel::setReplaySpeed,
+                    onReplayReset = viewModel::resetReplay,
+                    onSelectMtfProfile = viewModel::selectMtfProfile,
+                    onCreateEntryAlert = { setup, useRetrace ->
+                        ensureNotificationPermission()
+                        viewModel.createTbtEntryAlert(setup, useRetrace)
+                    },
+                    onCreateSlTpAlerts = { setup ->
+                        ensureNotificationPermission()
+                        viewModel.createTbtSlTpAlerts(setup)
+                    }
+                )
+
+                MultiExchangeVolumeControl(
+                    visible = state.preferences.showMultiExchVol,
+                    showTraps = state.preferences.multiExchShowTraps,
+                    selectedExchanges = state.preferences.multiExchSelectedExchanges,
+                    output = state.multiExchVol,
+                    collapseSignal = state.multiExchCollapseSignal,
+                    onToggleVisible = viewModel::toggleMultiExchVol,
+                    onToggleShowTraps = viewModel::toggleMultiExchShowTraps,
+                    onToggleExchange = viewModel::toggleMultiExchExchange,
+                    onResetDefaultExchanges = viewModel::resetDefaultMultiExchExchanges
+                )
+            }
+
+            // Multi-Exchange Price-Level Tap Popup (lists exchange names + Buy & Sell volume)
+            val tappedLevel = state.selectedMultiExchLevel
+            if (tappedLevel != null) {
+                MultiExchangeLevelPopup(
+                    level = tappedLevel,
+                    precision = state.contract?.pricePrecision ?: 2,
+                    onDismiss = viewModel::dismissMultiExchLevelPopup,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 10.dp, bottom = 44.dp)
+                )
+            }
 
             // Top-Right TBT SMC Multi-Timeframe Content Hub (1H Setup & 4H Setup)
             if (state.isTbtEffectivelyVisible &&
@@ -601,6 +635,8 @@ fun ChartScreen(
             preferences = state.preferences,
             onUpdatePreferences = viewModel::updatePreferences,
             onTestAlertSound = viewModel::testAlertSound,
+            updateCheckState = updateCheckState,
+            onCheckForUpdates = onCheckForUpdates,
             onDismiss = { showSettings = false }
         )
     }

@@ -869,4 +869,136 @@ class ChartAndWatchlistUiTest {
         composeTestRule.onNodeWithText("ETHUSDT").assertIsDisplayed()
         composeTestRule.onNodeWithText("BTCUSDT").assertDoesNotExist()
     }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun `multi exchange volume control exposes cex dex checkboxes trap toggle and tap breakdown popup`() {
+        var visibilityToggled = 0
+        var trapsToggled = 0
+        var toggledExchange: com.example.domain.indicator.SupportedExchange? = null
+        var popupDismissed = false
+
+        val level = com.example.domain.indicator.IntraCandleVolumeLevel(
+            id = "lvl_1",
+            candleTimeMillis = 1_750_000_000_000L,
+            bucketIndex = 3,
+            bucketCount = 4,
+            priceLow = 91800.0,
+            priceHigh = 92000.0,
+            priceMid = 91900.0,
+            dominantSide = com.example.domain.indicator.DominanceSide.BUY,
+            dominantExchangeCount = 3,
+            activeExchangeCount = 3,
+            totalBuyVolume = 1_500_000.0,
+            totalSellVolume = 350_000.0,
+            exchanges = listOf(
+                com.example.domain.indicator.ExchangeBucketBreakdown(
+                    com.example.domain.indicator.SupportedExchange.BINANCE,
+                    800_000.0,
+                    150_000.0
+                ),
+                com.example.domain.indicator.ExchangeBucketBreakdown(
+                    com.example.domain.indicator.SupportedExchange.BYBIT,
+                    450_000.0,
+                    120_000.0
+                ),
+                com.example.domain.indicator.ExchangeBucketBreakdown(
+                    com.example.domain.indicator.SupportedExchange.HYPERLIQUID,
+                    250_000.0,
+                    80_000.0
+                )
+            )
+        )
+
+        val output = com.example.domain.indicator.MultiExchangeVolumeOutput(
+            levels = listOf(level),
+            connectedExchanges = setOf(
+                com.example.domain.indicator.SupportedExchange.BINANCE,
+                com.example.domain.indicator.SupportedExchange.BYBIT,
+                com.example.domain.indicator.SupportedExchange.HYPERLIQUID
+            ),
+            checkedExchanges = com.example.domain.indicator.SupportedExchange.DEFAULT_SELECTED
+        )
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                androidx.compose.foundation.layout.Column {
+                    com.example.ui.chart.MultiExchangeVolumeControl(
+                        visible = true,
+                        showTraps = true,
+                        selectedExchanges = com.example.domain.indicator.SupportedExchange.DEFAULT_SELECTED,
+                        output = output,
+                        collapseSignal = 0,
+                        onToggleVisible = { visibilityToggled++ },
+                        onToggleShowTraps = { trapsToggled++ },
+                        onToggleExchange = { toggledExchange = it },
+                        onResetDefaultExchanges = {}
+                    )
+                    com.example.ui.chart.MultiExchangeLevelPopup(
+                        level = level,
+                        precision = 2,
+                        onDismiss = { popupDismissed = true }
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("multi_exch_indicator_tag").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Multi-Exch Vol & Traps").assertIsDisplayed()
+        composeTestRule.onNodeWithText("3/6").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("multi_exch_toggle_button").performClick()
+        assertEquals(1, visibilityToggled)
+
+        // Open settings drawer and verify CEX, Perp DEX checkboxes & Trap toggle
+        composeTestRule.onNodeWithTag("multi_exch_settings_button").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("multi_exch_settings_panel").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("multi_exch_traps_toggle").performClick()
+        assertEquals(1, trapsToggled)
+        composeTestRule.onNodeWithTag("multi_exch_cb_coinbase").assertIsDisplayed().performClick()
+        assertEquals(com.example.domain.indicator.SupportedExchange.COINBASE, toggledExchange)
+
+        // Verify Tap Popup lists exchange names & Buy/Sell volumes
+        composeTestRule.onNodeWithTag("multi_exch_level_popup").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("multi_exch_popup_row_binance").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("multi_exch_popup_row_bybit").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("multi_exch_popup_row_hyperliquid").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("multi_exch_popup_close").performClick()
+        assertEquals(true, popupDismissed)
+    }
+
+    @Test
+    fun `github update prompt banner shows new version notes download and dismiss controls`() {
+        var dismissed = false
+        var downloaded = false
+        val release = com.example.data.remote.GitHubReleaseInfo(
+            tagName = "v2.0.0",
+            version = "2.0.0",
+            releaseName = "Binance Pro v2.0.0",
+            notesSummary = "Multi-Exchange Volume & Traps + Auto-Updater",
+            downloadUrl = "https://github.com/surajali1026/binance3/releases/download/v2.0.0/app-release.apk",
+            htmlUrl = "https://github.com/surajali1026/binance3/releases/tag/v2.0.0"
+        )
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                com.example.ui.components.UpdatePromptBanner(
+                    release = release,
+                    onDismiss = { dismissed = true },
+                    onDownloadClick = { downloaded = true }
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("github_update_banner").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Binance Pro v2.0.0 Available").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Multi-Exchange Volume & Traps + Auto-Updater").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("github_update_download_btn").performClick()
+        composeTestRule.onNodeWithTag("github_update_dismiss_btn").performClick()
+
+        assertEquals(true, downloaded)
+        assertEquals(true, dismissed)
+    }
 }

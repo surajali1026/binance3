@@ -222,7 +222,10 @@ data class ChartPreferencesEntity(
     val tbtUseKillzone: Boolean = false,
     val tbtShowVolImbalanceLine: Boolean = true,
     val tbtShowZoneTags: Boolean = true,
-    val tbtMtfProfile: String = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H.name
+    val tbtMtfProfile: String = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H.name,
+    val showMultiExchVol: Boolean = true,
+    val multiExchShowTraps: Boolean = true,
+    val multiExchSelectedCsv: String = com.example.domain.indicator.SupportedExchange.DEFAULT_CSV
 ) {
     fun toDomain(): ChartPreferences = ChartPreferences(
         lastSymbol = lastSymbol,
@@ -252,7 +255,10 @@ data class ChartPreferencesEntity(
         tbtShowZoneTags = tbtShowZoneTags,
         tbtMtfProfile = runCatching {
             com.example.domain.indicator.TbtMtfProfile.valueOf(tbtMtfProfile)
-        }.getOrDefault(com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H)
+        }.getOrDefault(com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H),
+        showMultiExchVol = showMultiExchVol,
+        multiExchShowTraps = multiExchShowTraps,
+        multiExchSelectedExchanges = com.example.domain.indicator.SupportedExchange.parseCsv(multiExchSelectedCsv)
     )
 
     companion object {
@@ -283,7 +289,10 @@ data class ChartPreferencesEntity(
             tbtUseKillzone = prefs.tbtUseKillzone,
             tbtShowVolImbalanceLine = prefs.tbtShowVolImbalanceLine,
             tbtShowZoneTags = prefs.tbtShowZoneTags,
-            tbtMtfProfile = prefs.tbtMtfProfile.name
+            tbtMtfProfile = prefs.tbtMtfProfile.name,
+            showMultiExchVol = prefs.showMultiExchVol,
+            multiExchShowTraps = prefs.multiExchShowTraps,
+            multiExchSelectedCsv = com.example.domain.indicator.SupportedExchange.toCsv(prefs.multiExchSelectedExchanges)
         )
     }
 }

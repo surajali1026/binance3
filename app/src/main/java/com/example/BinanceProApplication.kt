@@ -11,6 +11,8 @@ import com.example.data.remote.BinanceVisionApi
 import com.example.data.remote.BybitLinearApi
 import com.example.data.remote.CoinGeckoApi
 import com.example.data.remote.CoinPaprikaApi
+import com.example.data.remote.GitHubUpdateChecker
+import com.example.data.remote.MultiExchangeTradeRepository
 import com.example.data.repository.ChartStateRepository
 import com.example.data.repository.MarketRepository
 import com.squareup.moshi.Moshi
@@ -126,6 +128,14 @@ class AppContainer(context: Context) {
 
     val chartStateRepository: ChartStateRepository by lazy {
         ChartStateRepository(database)
+    }
+
+    val multiExchangeTradeRepository: MultiExchangeTradeRepository by lazy {
+        MultiExchangeTradeRepository(okHttpClient)
+    }
+
+    val gitHubUpdateChecker: GitHubUpdateChecker by lazy {
+        GitHubUpdateChecker(okHttpClient)
     }
 
     companion object {

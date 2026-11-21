@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
         AlertHistoryEntity::class,
         ChartPreferencesEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -187,6 +187,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN showMultiExchVol INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN multiExchShowTraps INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN multiExchSelectedCsv TEXT NOT NULL DEFAULT 'BINANCE,BYBIT,OKX,BITGET,HYPERLIQUID,DYDX'")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: buildDatabase(context.applicationContext).also { INSTANCE = it }
@@ -206,7 +214,8 @@ abstract class AppDatabase : RoomDatabase() {
                 MIGRATION_5_6,
                 MIGRATION_6_7,
                 MIGRATION_7_8,
-                MIGRATION_8_9
+                MIGRATION_8_9,
+                MIGRATION_9_10
             )
                 .addCallback(object : Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {

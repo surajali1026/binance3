@@ -334,6 +334,11 @@ body.immersive-landscape{
         let previousTbtSig = '';
         let tbtEnabled = false;
         let tbtZones = [];
+        let multiExchEnabled = false;
+        let multiExchLevels = [];
+        let multiExchTraps = [];
+        let multiExchSelectedId = '';
+        let renderedMultiExchHitBoxes = [];
         let activeDrawings = [];
         let activeAlerts = [];
         let pendingPoints = [];
@@ -820,6 +825,88 @@ body.immersive-landscape{
                 }
             }
 
+            // Standalone Multi-Exch Intra-Candle Buy/Sell Count Badges & Trap Tags
+            renderedMultiExchHitBoxes = [];
+            if(multiExchEnabled){
+                for(let i = 0; i < multiExchLevels.length; i++){
+                    const lvl = multiExchLevels[i];
+                    const lx = resolveTimeToX(lvl.time);
+                    const ly = candles.priceToCoordinate(lvl.price);
+                    if(lx == null || ly == null || lx < -20 || lx > plotW + 20 || ly < 8 || ly > h - 24) continue;
+                    const countText = String(lvl.count || 1);
+                    const isBuy = lvl.side === 'BUY';
+                    const isSelected = multiExchSelectedId && lvl.id === multiExchSelectedId;
+                    const badgeW = countText.length > 1 ? 21 : 17;
+                    const badgeH = 15;
+                    const bx = lx - badgeW / 2;
+                    const by = ly - badgeH / 2;
+
+                    ctx.save();
+                    ctx.fillStyle = isBuy ? 'rgba(14, 203, 129, 0.88)' : 'rgba(246, 70, 93, 0.88)';
+                    ctx.strokeStyle = isSelected ? '#f0b90b' : (isBuy ? '#a7f3d0' : '#fecdd3');
+                    ctx.lineWidth = isSelected ? 2 : 1;
+                    ctx.beginPath();
+                    if(ctx.roundRect){
+                        ctx.roundRect(bx, by, badgeW, badgeH, 4);
+                    } else {
+                        ctx.rect(bx, by, badgeW, badgeH);
+                    }
+                    ctx.fill();
+                    ctx.stroke();
+
+                    ctx.font = 'bold 10px Arial';
+                    ctx.fillStyle = '#090d12';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(countText, lx, ly + 0.5);
+                    ctx.restore();
+
+                    renderedMultiExchHitBoxes.push({
+                        id: lvl.id,
+                        x: bx,
+                        y: by,
+                        w: badgeW,
+                        h: badgeH
+                    });
+                }
+
+                for(let i = 0; i < multiExchTraps.length; i++){
+                    const trap = multiExchTraps[i];
+                    const tx = resolveTimeToX(trap.time);
+                    const ty = candles.priceToCoordinate(trap.price);
+                    if(tx == null || ty == null || tx < -40 || tx > plotW + 40) continue;
+                    const isBuyerTrap = trap.type === 'BUYER_TRAP';
+                    const tagText = isBuyerTrap ? 'Buyer Trap' : 'Seller Trap';
+                    ctx.save();
+                    ctx.font = 'bold 9.5px Arial';
+                    const tw = ctx.measureText(tagText).width;
+                    const pw = tw + 10;
+                    const ph = 15;
+                    const px = Math.max(4, Math.min(plotW - pw - 4, tx - pw / 2));
+                    const py = isBuyerTrap
+                        ? Math.max(6, ty - ph - 8)
+                        : Math.min(h - ph - 26, ty + 8);
+
+                    ctx.fillStyle = isBuyerTrap ? 'rgba(246, 70, 93, 0.92)' : 'rgba(14, 203, 129, 0.92)';
+                    ctx.strokeStyle = '#f0b90b';
+                    ctx.lineWidth = 0.9;
+                    ctx.beginPath();
+                    if(ctx.roundRect){
+                        ctx.roundRect(px, py, pw, ph, 4);
+                    } else {
+                        ctx.rect(px, py, pw, ph);
+                    }
+                    ctx.fill();
+                    ctx.stroke();
+
+                    ctx.fillStyle = '#090d12';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(tagText, px + pw / 2, py + ph / 2 + 0.5);
+                    ctx.restore();
+                }
+            }
+
             ctx.restore();
             positionOverlayElements();
         }
@@ -913,6 +1000,28 @@ body.immersive-landscape{
         }
 
         window.clearTbtSmc = clearAllTbtVisuals;
+
+        function clearAllMultiExchVisuals(){
+            multiExchEnabled = false;
+            multiExchLevels = [];
+            multiExchTraps = [];
+            multiExchSelectedId = '';
+            renderedMultiExchHitBoxes = [];
+            schedulePaintDrawings();
+        }
+
+        window.clearMultiExchVol = clearAllMultiExchVisuals;
+
+        function syncMultiExchVol(meData){
+            if(!meData || !meData.enabled){
+                clearAllMultiExchVisuals();
+                return;
+            }
+            multiExchEnabled = true;
+            multiExchSelectedId = meData.selectedId || '';
+            multiExchLevels = Array.isArray(meData.levels) ? meData.levels : [];
+            multiExchTraps = Array.isArray(meData.traps) ? meData.traps : [];
+        }
 
         function syncTbtSmc(tbtData){
             if(!tbtData || !tbtData.enabled){
@@ -1025,6 +1134,9 @@ body.immersive-landscape{
                 if(d.tbtSmc !== undefined){
                     syncTbtSmc(d.tbtSmc);
                 }
+                if(d.multiExchVol !== undefined){
+                    syncMultiExchVol(d.multiExchVol);
+                }
                 schedulePaintDrawings();
             }catch(e){
                 if(window.AndroidChart) AndroidChart.onError(String(e));
@@ -1081,6 +1193,9 @@ body.immersive-landscape{
                 }
                 if(d.tbtSmc !== undefined){
                     syncTbtSmc(d.tbtSmc);
+                }
+                if(d.multiExchVol !== undefined){
+                    syncMultiExchVol(d.multiExchVol);
                 }
                 schedulePaintDrawings();
             }catch(e){
@@ -1298,6 +1413,19 @@ body.immersive-landscape{
         let lastTapInfo = null;
         let activeObjectDrag = null; // { mode: 'anchor'|'whole'|'alert', drawing, anchorIndex, alert, origPoints, origTime, origPrice, currentPrice, deltaTime, deltaPrice }
 
+        function hitTestMultiExchLevel(localX, localY){
+            if(!multiExchEnabled || !renderedMultiExchHitBoxes.length) return null;
+            const pad = 11;
+            for(let i = renderedMultiExchHitBoxes.length - 1; i >= 0; i--){
+                const b = renderedMultiExchHitBoxes[i];
+                if(localX >= b.x - pad && localX <= b.x + b.w + pad &&
+                   localY >= b.y - pad && localY <= b.y + b.h + pad){
+                    return b;
+                }
+            }
+            return null;
+        }
+
         function dispatchTapAtClientPoint(clientX, clientY){
             const rect = el.getBoundingClientRect();
             const localX = clientX - rect.left;
@@ -1312,6 +1440,13 @@ body.immersive-landscape{
                 return;
             }
             const canSelect = activeTool === 'NONE' && !isPickingReplay;
+            if(canSelect){
+                const hitLevel = hitTestMultiExchLevel(localX, localY);
+                if(hitLevel && window.AndroidChart && AndroidChart.onMultiExchLevelTap){
+                    AndroidChart.onMultiExchLevelTap(hitLevel.id);
+                    return;
+                }
+            }
             const hitD = canSelect ? hitTestDrawingBody(localX, localY, 24, false) : null;
             const hitA = (canSelect && !hitD) ? hitTestAlertLine(localY, 22, false) : null;
             if(window.AndroidChart){
