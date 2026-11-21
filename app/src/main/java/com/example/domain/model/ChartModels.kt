@@ -112,11 +112,22 @@ data class ChartPreferences(
     val tbtShowVolImbalanceLine: Boolean = true,
     val tbtShowZoneTags: Boolean = true,
     val tbtMtfProfile: com.example.domain.indicator.TbtMtfProfile = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H,
+    val tbtActiveHubTabId: String = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H.name,
+    val tbtCustomHubTabs: List<com.example.domain.indicator.TbtMtfHubTab> = listOf(
+        com.example.domain.indicator.TbtMtfHubTab.DEFAULT_CUSTOM_30M
+    ),
     val showMultiExchVol: Boolean = true,
     val multiExchShowTraps: Boolean = true,
     val multiExchSelectedExchanges: Set<com.example.domain.indicator.SupportedExchange> =
         com.example.domain.indicator.SupportedExchange.DEFAULT_SELECTED
 ) {
+    val allMtfHubTabs: List<com.example.domain.indicator.TbtMtfHubTab>
+        get() = com.example.domain.indicator.TbtMtfHubTab.allTabs(tbtCustomHubTabs)
+
+    val activeMtfHubTab: com.example.domain.indicator.TbtMtfHubTab
+        get() = allMtfHubTabs.firstOrNull { it.id == tbtActiveHubTabId }
+            ?: tbtMtfProfile.toHubTab()
+
     fun toTbtSmcConfig(): TbtSmcConfig = TbtSmcConfig(
         swingLen = 5,
         showZones = tbtShowZones,
@@ -129,7 +140,8 @@ data class ChartPreferences(
         slBufferPct = tbtSlBufferPct,
         showVolImbalanceLine = tbtShowVolImbalanceLine,
         showZoneTags = tbtShowZoneTags,
-        mtfProfile = tbtMtfProfile
+        mtfProfile = tbtMtfProfile,
+        activeHubTab = activeMtfHubTab
     )
 }
 

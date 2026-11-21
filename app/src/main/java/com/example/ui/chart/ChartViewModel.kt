@@ -34,6 +34,7 @@ import com.example.domain.indicator.IntraCandleVolumeLevel
 import com.example.domain.indicator.MultiExchangeVolumeEngine
 import com.example.domain.indicator.MultiExchangeVolumeOutput
 import com.example.domain.indicator.SupportedExchange
+import com.example.domain.indicator.TbtMtfHubTab
 import com.example.domain.indicator.TbtMtfProfile
 import com.example.domain.indicator.TbtSmcEngine
 import com.example.domain.indicator.TbtSmcOutput
@@ -54,6 +55,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -429,7 +431,7 @@ class ChartViewModel(
             // Always override the active timeframe entry with the live chart candles
             mergedMtf[activeTf.id] = displayed
 
-            val anchorTfId = prefs.tbtMtfProfile.shortLabel
+            val anchorTfId = prefs.activeMtfHubTab.anchorTimeframeId
             val validHtfCandles = mergedMtf.entries
                 .firstOrNull { it.key.equals(anchorTfId, ignoreCase = true) }
                 ?.value
@@ -618,13 +620,13 @@ class ChartViewModel(
         }
         viewModelScope.launch {
             chartStateRepository.preferences
-                .map { it.tbtMtfProfile }
+                .map { it.activeMtfHubTab }
                 .distinctUntilChanged()
-                .collect { profile ->
+                .collect { activeTab ->
                     val sym = _symbol.value
                     val src = _priceSource.value
                     if (sym.isNotBlank()) {
-                        refreshMultiTimeframeContext(sym, src, profile)
+                        refreshMultiTimeframeContext(sym, src, activeTab)
                     }
                 }
         }
@@ -651,6 +653,7 @@ class ChartViewModel(
                     multiExchFeedJob = viewModelScope.launch {
                         multiExchangeTradeRepository
                             .observeExchangeVolumes(sym, tf, selected)
+                            .catch { _isLoadingMultiExch.value = false }
                             .collect { snap ->
                                 _multiExchSnapshot.value = snap
                                 _isLoadingMultiExch.value = false
@@ -800,8 +803,8 @@ class ChartViewModel(
         }
         _errorMessage.value = null
 
-        // Fetch live Multi-Timeframe candles (1H..3m or 4H..3m including 10m) from Binance API for TBT SMC Hub
-        refreshMultiTimeframeContext(sym, source, uiState.value.preferences.tbtMtfProfile)
+        // Fetch live Multi-Timeframe candles for the active TBT HUB tab (1H, 4H, 30m, or custom)
+        refreshMultiTimeframeContext(sym, source, uiState.value.preferences.activeMtfHubTab)
 
         klineStreamJob = viewModelScope.launch {
             val resolvedTf = cachedTimeframes.firstOrNull { it.id == tfId }
@@ -893,10 +896,22 @@ class ChartViewModel(
     }
 
     private fun resolveMtfTimeframe(tfId: String): Timeframe {
-        cachedTimeframes.firstOrNull { it.id.equals(tfId, ignoreCase = true) }?.let { return it }
-        Timeframe.DEFAULTS.firstOrNull { it.id.equals(tfId, ignoreCase = true) }?.let { return it }
-        if (tfId.equals("10m", ignoreCase = true)) {
-            return Timeframe.createCustom(10, CustomTimeUnit.MINUTES, sortOrder = 3)
+        val norm = TbtMtfHubTab.normalizeTimeframeToken(tfId) ?: tfId.trim()
+        cachedTimeframes.firstOrNull {
+            it.id.equals(norm, ignoreCase = true) || it.label.equals(norm, ignoreCase = true)
+        }?.let { return it }
+        Timeframe.DEFAULTS.firstOrNull {
+            it.id.equals(norm, ignoreCase = true) || it.label.equals(norm, ignoreCase = true)
+        }?.let { return it }
+        val match = Regex("^(\\d+)([mHD])$", RegexOption.IGNORE_CASE).matchEntire(norm)
+        if (match != null) {
+            val amount = match.groupValues[1].toIntOrNull()?.coerceIn(1, 1440) ?: 15
+            val unit = when (match.groupValues[2].uppercase()) {
+                "H" -> CustomTimeUnit.HOURS
+                "D" -> CustomTimeUnit.DAYS
+                else -> CustomTimeUnit.MINUTES
+            }
+            return Timeframe.createCustom(amount, unit, sortOrder = 50)
         }
         return Timeframe.DEFAULTS[4]
     }
@@ -904,10 +919,10 @@ class ChartViewModel(
     private fun refreshMultiTimeframeContext(
         symbol: String,
         source: PriceSource,
-        profile: TbtMtfProfile
+        tab: TbtMtfHubTab
     ) {
         mtfFetchJob?.cancel()
-        val tfIds = profile.timeframeIds
+        val tfIds = tab.timeframeIds.ifEmpty { TbtMtfProfile.INTRADAY_1H.timeframeIds }
 
         // Seed immediately from fresh repository cache for instant Hub rendering
         val initialMap = LinkedHashMap<String, List<Candle>>()
@@ -1840,7 +1855,65 @@ class ChartViewModel(
     }
 
     fun selectMtfProfile(profile: TbtMtfProfile) {
-        updatePreferences { it.copy(tbtMtfProfile = profile) }
+        updatePreferences {
+            it.copy(
+                tbtMtfProfile = profile,
+                tbtActiveHubTabId = profile.name
+            )
+        }
+    }
+
+    fun selectMtfHubTab(tabId: String) {
+        updatePreferences { prefs ->
+            val matchingProfile = when (tabId) {
+                TbtMtfProfile.INTRADAY_1H.name -> TbtMtfProfile.INTRADAY_1H
+                TbtMtfProfile.SWING_4H.name -> TbtMtfProfile.SWING_4H
+                else -> prefs.tbtMtfProfile
+            }
+            prefs.copy(
+                tbtMtfProfile = matchingProfile,
+                tbtActiveHubTabId = tabId
+            )
+        }
+    }
+
+    fun addCustomMtfHubTab(name: String, rawTimeframes: List<String>) {
+        val cleanedTfs = rawTimeframes
+            .mapNotNull { TbtMtfHubTab.normalizeTimeframeToken(it) }
+            .distinctBy { it.lowercase() }
+            .sortedByDescending { TbtMtfHubTab.durationMillisOf(it) }
+        if (cleanedTfs.isEmpty()) return
+        val label = name.trim().take(12).ifBlank { cleanedTfs.first() }
+        val newTab = TbtMtfHubTab(
+            id = "custom_${System.currentTimeMillis()}_${label.lowercase().replace(Regex("[^a-z0-9]"), "")}",
+            name = label,
+            timeframeIds = cleanedTfs,
+            isBuiltIn = false
+        )
+        updatePreferences { prefs ->
+            val deduped = prefs.tbtCustomHubTabs.filterNot {
+                it.name.equals(label, ignoreCase = true) && it.timeframeIds == cleanedTfs
+            }
+            prefs.copy(
+                tbtCustomHubTabs = deduped + newTab,
+                tbtActiveHubTabId = newTab.id
+            )
+        }
+    }
+
+    fun deleteCustomMtfHubTab(tabId: String) {
+        updatePreferences { prefs ->
+            val remaining = prefs.tbtCustomHubTabs.filterNot { it.id == tabId }
+            val nextActive = if (prefs.tbtActiveHubTabId == tabId) {
+                TbtMtfProfile.INTRADAY_1H.name
+            } else {
+                prefs.tbtActiveHubTabId
+            }
+            prefs.copy(
+                tbtCustomHubTabs = remaining,
+                tbtActiveHubTabId = nextActive
+            )
+        }
     }
 
     // Standalone Multi-Exch Vol & Traps Indicator Actions (completely independent from TBT SMC)

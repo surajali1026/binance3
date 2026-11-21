@@ -906,22 +906,31 @@ class TradingCoreUnitTest {
             showTraps = true
         )
 
-        // Candle 0 top level: 3 green checked exchanges (Coinbase was unchecked so NOT counted)
+        // Candle 0 top level: 3 green checked exchanges (Coinbase was unchecked so NOT counted), POC & Buy Imbalance
         val c0Level = out.levels.first { it.candleTimeMillis == buyerTrapCandle.openTime }
         assertEquals(com.example.domain.indicator.DominanceSide.BUY, c0Level.dominantSide)
         assertEquals(3, c0Level.dominantExchangeCount)
+        assertTrue(c0Level.isPoc)
+        assertTrue(c0Level.isBuyImbalance)
         assertTrue(c0Level.exchanges.none { it.exchange == com.example.domain.indicator.SupportedExchange.COINBASE })
 
-        // Candle 1 bottom level: 4 red checked exchanges
+        // Candle 1 bottom level: 4 red checked exchanges, POC & Sell Imbalance
         val c1Level = out.levels.first { it.candleTimeMillis == sellerTrapCandle.openTime }
         assertEquals(com.example.domain.indicator.DominanceSide.SELL, c1Level.dominantSide)
         assertEquals(4, c1Level.dominantExchangeCount)
+        assertTrue(c1Level.isPoc)
+        assertTrue(c1Level.isSellImbalance)
+
+        // Per-candle footprint summaries compute Buy/Sell volume & Delta cleanly
+        assertEquals(2, out.candleSummaries.size)
+        assertTrue(out.candleSummaries.first { it.candleTimeMillis == buyerTrapCandle.openTime }.delta > 0.0)
+        assertTrue(out.candleSummaries.first { it.candleTimeMillis == sellerTrapCandle.openTime }.delta < 0.0)
 
         // Both Buyer Trap & Seller Trap detected
         assertTrue(out.traps.any { it.type == com.example.domain.indicator.TrapType.BUYER_TRAP })
         assertTrue(out.traps.any { it.type == com.example.domain.indicator.TrapType.SELLER_TRAP })
 
-        // Trap toggle OFF suppresses all trap tags while keeping level counts intact
+        // Trap toggle OFF suppresses all trap tags while keeping footprint levels intact
         val noTrapsOut = com.example.domain.indicator.MultiExchangeVolumeEngine.calculate(
             candles = listOf(buyerTrapCandle, sellerTrapCandle),
             snapshot = snapshot,
@@ -930,6 +939,66 @@ class TradingCoreUnitTest {
         )
         assertTrue(noTrapsOut.traps.isEmpty())
         assertEquals(2, noTrapsOut.levels.size)
+    }
+
+    @Test
+    fun `tbt mtf hub custom tab parses 30 15 10 5 2 serializes and outputs bullish bearish cascade`() {
+        val parsed = com.example.domain.indicator.TbtMtfHubTab.parseTimeframeList("30 15 10 5 2")
+        assertEquals(listOf("30m", "15m", "10m", "5m", "2m"), parsed)
+
+        val customTab = com.example.domain.indicator.TbtMtfHubTab(
+            id = "custom_30m_scalp",
+            name = "30m",
+            timeframeIds = parsed,
+            isBuiltIn = false
+        )
+        val encoded = com.example.domain.indicator.TbtMtfHubTab.serializeCustomTabs(listOf(customTab))
+        val decoded = com.example.domain.indicator.TbtMtfHubTab.deserializeCustomTabs(encoded)
+        assertEquals(1, decoded.size)
+        assertEquals("30m", decoded.first().name)
+        assertEquals(listOf("30m", "15m", "10m", "5m", "2m"), decoded.first().timeframeIds)
+
+        fun buildTrendingCandles(bullish: Boolean, stepMs: Long): List<Candle> {
+            val start = 1_750_000_000_000L
+            return List(35) { i ->
+                val base = if (bullish) 100.0 + i * 1.2 else 200.0 - i * 1.2
+                val open = base
+                val close = if (bullish) base + 0.9 else base - 0.9
+                Candle(
+                    openTime = start + i * stepMs,
+                    closeTime = start + (i + 1) * stepMs - 1L,
+                    open = open,
+                    high = maxOf(open, close) + 0.4,
+                    low = minOf(open, close) - 0.4,
+                    close = close,
+                    volume = 1200.0 + i * 25.0,
+                    isClosed = true
+                )
+            }
+        }
+
+        val candlesByTf = mapOf(
+            "30m" to buildTrendingCandles(true, 1_800_000L),
+            "15m" to buildTrendingCandles(true, 900_000L),
+            "10m" to buildTrendingCandles(true, 600_000L),
+            "5m" to buildTrendingCandles(true, 300_000L),
+            "2m" to buildTrendingCandles(false, 120_000L)
+        )
+
+        val cascade = com.example.domain.indicator.TbtSmcEngine.evaluateMtfCascadeForTab(
+            tab = customTab,
+            candlesByTf = candlesByTf
+        )
+
+        assertEquals("custom_30m_scalp", cascade.tabId)
+        assertEquals(5, cascade.snapshots.size)
+        assertEquals(listOf("30m", "15m", "10m", "5m", "2m"), cascade.snapshots.map { it.tfId })
+        assertEquals(com.example.domain.indicator.TbtMarketBias.BULLISH, cascade.snapshots[0].bias)
+        assertEquals("BULL", cascade.snapshots[0].statusShort)
+        assertEquals(com.example.domain.indicator.TbtMarketBias.BEARISH, cascade.snapshots[4].bias)
+        assertEquals("BEAR", cascade.snapshots[4].statusShort)
+        assertEquals(4, cascade.alignedCount)
+        assertEquals(5, cascade.totalCount)
     }
 
     @Test

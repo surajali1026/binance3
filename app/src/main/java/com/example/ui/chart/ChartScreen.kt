@@ -88,6 +88,7 @@ fun ChartScreen(
     var showTimeframePicker by remember { mutableStateOf(false) }
     var showAlertsManager by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showAddCustomHubTab by remember { mutableStateOf(false) }
     var showEditDrawing by remember { mutableStateOf<ChartDrawing?>(null) }
     var createAlertRequest by remember { mutableStateOf<Pair<Double, ChartDrawing?>?>(null) }
 
@@ -295,6 +296,8 @@ fun ChartScreen(
                     onReplaySetSpeed = viewModel::setReplaySpeed,
                     onReplayReset = viewModel::resetReplay,
                     onSelectMtfProfile = viewModel::selectMtfProfile,
+                    onSelectHubTab = viewModel::selectMtfHubTab,
+                    onAddCustomHubTabClick = { showAddCustomHubTab = true },
                     onCreateEntryAlert = { setup, useRetrace ->
                         ensureNotificationPermission()
                         viewModel.createTbtEntryAlert(setup, useRetrace)
@@ -347,8 +350,11 @@ fun ChartScreen(
                     mtfCascade = state.tbtSmc.mtfCascade,
                     activeProfile = state.preferences.tbtMtfProfile,
                     activeTimeframeId = state.activeTimeframe.id,
+                    hubTabs = state.preferences.allMtfHubTabs,
+                    activeHubTabId = state.preferences.activeMtfHubTab.id,
                     onSelectMtfProfile = viewModel::selectMtfProfile,
-                    onSelectTimeframe = viewModel::jumpToMtfTimeframe,
+                    onSelectHubTab = viewModel::selectMtfHubTab,
+                    onAddCustomHubTabClick = { showAddCustomHubTab = true },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = hudTopOffset, end = 74.dp)
@@ -638,6 +644,15 @@ fun ChartScreen(
             updateCheckState = updateCheckState,
             onCheckForUpdates = onCheckForUpdates,
             onDismiss = { showSettings = false }
+        )
+    }
+
+    if (showAddCustomHubTab) {
+        AddCustomMtfHubTabDialog(
+            customTabs = state.preferences.tbtCustomHubTabs,
+            onAddTab = viewModel::addCustomMtfHubTab,
+            onDeleteTab = viewModel::deleteCustomMtfHubTab,
+            onDismiss = { showAddCustomHubTab = false }
         )
     }
 }

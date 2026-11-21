@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
         AlertHistoryEntity::class,
         ChartPreferencesEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -195,6 +195,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtActiveHubTabId TEXT NOT NULL DEFAULT 'INTRADAY_1H'")
+                db.execSQL("ALTER TABLE chart_preferences ADD COLUMN tbtCustomHubTabsJson TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: buildDatabase(context.applicationContext).also { INSTANCE = it }
@@ -215,7 +222,8 @@ abstract class AppDatabase : RoomDatabase() {
                 MIGRATION_6_7,
                 MIGRATION_7_8,
                 MIGRATION_8_9,
-                MIGRATION_9_10
+                MIGRATION_9_10,
+                MIGRATION_10_11
             )
                 .addCallback(object : Callback() {
                 override fun onCreate(db: SupportSQLiteDatabase) {

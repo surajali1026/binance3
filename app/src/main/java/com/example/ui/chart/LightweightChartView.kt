@@ -494,15 +494,37 @@ fun LightweightChartView(
             put("enabled", multiExchEnabled)
             put("selectedId", state.selectedMultiExchLevelId ?: "")
             val lvlArr = JSONArray()
+            val candleArr = JSONArray()
             val trapArr = JSONArray()
             if (multiExchEnabled) {
                 state.multiExchVol.levels.forEach { lvl ->
                     lvlArr.put(JSONObject().apply {
                         put("id", lvl.id)
                         put("time", lvl.candleTimeMillis / 1000L)
+                        put("priceLow", lvl.priceLow)
+                        put("priceHigh", lvl.priceHigh)
                         put("price", lvl.priceMid)
+                        put("buyVol", lvl.totalBuyVolume)
+                        put("sellVol", lvl.totalSellVolume)
+                        put("delta", lvl.delta)
+                        put("isPoc", lvl.isPoc)
+                        put("buyImb", lvl.isBuyImbalance)
+                        put("sellImb", lvl.isSellImbalance)
+                        put("volRatio", lvl.volumeRatio)
                         put("side", lvl.dominantSide.name)
                         put("count", lvl.dominantExchangeCount)
+                    })
+                }
+                state.multiExchVol.candleSummaries.forEach { summary ->
+                    candleArr.put(JSONObject().apply {
+                        put("time", summary.candleTimeMillis / 1000L)
+                        put("low", summary.candleLow)
+                        put("high", summary.candleHigh)
+                        put("buyVol", summary.totalBuyVolume)
+                        put("sellVol", summary.totalSellVolume)
+                        put("delta", summary.delta)
+                        put("totalVol", summary.totalVolume)
+                        put("poc", summary.pocPriceMid)
                     })
                 }
                 state.multiExchVol.traps.forEach { trap ->
@@ -515,6 +537,7 @@ fun LightweightChartView(
                 }
             }
             put("levels", lvlArr)
+            put("candles", candleArr)
             put("traps", trapArr)
         }
         root.put("multiExchVol", meObj)

@@ -80,7 +80,7 @@ class MultiExchangeTradeRepository(
         val liveTicks = ConcurrentHashMap<SupportedExchange, ArrayList<ExchangeTradeTick>>()
         val liveFlows = ConcurrentHashMap<SupportedExchange, List<ExchangeCandleFlow>>()
         val connectedSet = ConcurrentHashMap.newKeySet<SupportedExchange>()
-        val openSockets = ArrayList<WebSocket>()
+        val openSockets = java.util.Collections.synchronizedList(ArrayList<WebSocket>())
         val stateLock = Any()
 
         fun buildSnapshot(): ExchangeVolumeSnapshot {
@@ -148,12 +148,14 @@ class MultiExchangeTradeRepository(
             }
         }
 
-        openCheckedWebSockets(
-            symbol = cleanSymbol,
-            selectedExchanges = selectedExchanges,
-            onTick = ::appendLiveTick,
-            sinkSockets = openSockets
-        )
+        val wsConnectJob = launch(Dispatchers.IO) {
+            openCheckedWebSockets(
+                symbol = cleanSymbol,
+                selectedExchanges = selectedExchanges,
+                onTick = ::appendLiveTick,
+                sinkSockets = openSockets
+            )
+        }
 
         // 3) Parallel throttled public REST fetch across ONLY checked exchanges (recent trades + klines)
         val pollJob = launch(Dispatchers.IO) {
@@ -194,16 +196,19 @@ class MultiExchangeTradeRepository(
                 }
             } catch (_: CancellationException) {
                 // Normal lifecycle cancellation
+            } catch (_: Throwable) {
+                // Keep chart running smoothly on transient network errors
             }
         }
 
         try {
             pollJob.join()
         } finally {
+            wsConnectJob.cancel()
             wsEmitJob.cancel()
             pollJob.cancel()
-            openSockets.forEach { ws -> runCatching { ws.close(1000, "closed") } }
-            openSockets.clear()
+            val toClose = synchronized(openSockets) { openSockets.toList().also { openSockets.clear() } }
+            toClose.forEach { ws -> runCatching { ws.close(1000, "closed") } }
         }
     }
 
@@ -249,7 +254,8 @@ class MultiExchangeTradeRepository(
             val req = Request.Builder()
                 .url("wss://fstream.binance.com/ws/${lower}@aggTrade")
                 .build()
-            sinkSockets.add(httpClient.newWebSocket(req, object : WebSocketListener() {
+            runCatching {
+                sinkSockets.add(httpClient.newWebSocket(req, object : WebSocketListener() {
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     runCatching {
                         val o = JSONObject(text)
@@ -270,13 +276,15 @@ class MultiExchangeTradeRepository(
                     }
                 }
             }))
+            }
         }
 
         if (selectedExchanges.contains(SupportedExchange.BYBIT)) {
             val req = Request.Builder()
                 .url("wss://stream.bybit.com/v5/public/linear")
                 .build()
-            sinkSockets.add(httpClient.newWebSocket(req, object : WebSocketListener() {
+            runCatching {
+                sinkSockets.add(httpClient.newWebSocket(req, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     webSocket.send("""{"op":"subscribe","args":["publicTrade.$symbol"]}""")
                 }
@@ -305,6 +313,7 @@ class MultiExchangeTradeRepository(
                     }
                 }
             }))
+            }
         }
 
         if (selectedExchanges.contains(SupportedExchange.OKX)) {
@@ -312,7 +321,8 @@ class MultiExchangeTradeRepository(
             val req = Request.Builder()
                 .url("wss://ws.okx.com:8443/ws/v5/public")
                 .build()
-            sinkSockets.add(httpClient.newWebSocket(req, object : WebSocketListener() {
+            runCatching {
+                sinkSockets.add(httpClient.newWebSocket(req, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     webSocket.send("""{"op":"subscribe","args":[{"channel":"trades","instId":"$instId"}]}""")
                 }
@@ -341,13 +351,15 @@ class MultiExchangeTradeRepository(
                     }
                 }
             }))
+            }
         }
 
         if (selectedExchanges.contains(SupportedExchange.HYPERLIQUID)) {
             val req = Request.Builder()
                 .url("wss://api.hyperliquid.xyz/ws")
                 .build()
-            sinkSockets.add(httpClient.newWebSocket(req, object : WebSocketListener() {
+            runCatching {
+                sinkSockets.add(httpClient.newWebSocket(req, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     webSocket.send("""{"method":"subscribe","subscription":{"type":"trades","coin":"$base"}}""")
                 }
@@ -377,6 +389,7 @@ class MultiExchangeTradeRepository(
                     }
                 }
             }))
+            }
         }
     }
 
@@ -398,7 +411,7 @@ class MultiExchangeTradeRepository(
         }
 
         val base = extractBaseAsset(symbol)
-        val result = runCatching {
+        val result = try {
             when (exchange) {
                 SupportedExchange.BINANCE -> fetchBinance(symbol, timeframe)
                 SupportedExchange.BYBIT -> fetchBybit(symbol, timeframe)
@@ -415,7 +428,11 @@ class MultiExchangeTradeRepository(
                 SupportedExchange.PARADEX -> fetchParadex(base)
                 SupportedExchange.GMX -> fetchGmx(base)
             }
-        }.getOrDefault(ExchangeFetchResult())
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Throwable) {
+            ExchangeFetchResult()
+        }
 
         exchange to result
     }
@@ -1188,10 +1205,37 @@ class MultiExchangeTradeRepository(
         return buyVol to sellVol
     }
 
+    /**
+     * API 24-compatible ISO-8601 UTC timestamp parser (avoids java.time.Instant API 26 requirement).
+     * Handles formats like "2026-11-21T12:34:56.789123Z", "2026-11-21T12:34:56Z", and "+00:00".
+     */
     private fun parseIsoTimestampMillis(iso: String): Long? {
-        if (iso.isBlank()) return null
+        val raw = iso.trim()
+        if (raw.length < 19) return null
         return runCatching {
-            java.time.Instant.parse(iso).toEpochMilli()
+            val clean = raw.replace("+00:00", "Z")
+            val tzUtc = java.util.TimeZone.getTimeZone("UTC")
+            val mainPart = clean.substring(0, 19)
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US).apply {
+                timeZone = tzUtc
+                isLenient = false
+            }
+            val baseMs = sdf.parse(mainPart)?.time ?: return@runCatching null
+            var extraMs = 0L
+            val dotIdx = clean.indexOf('.', startIndex = 19)
+            if (dotIdx >= 19) {
+                val fracDigits = buildString {
+                    var i = dotIdx + 1
+                    while (i < clean.length && clean[i].isDigit() && length < 3) {
+                        append(clean[i])
+                        i++
+                    }
+                }
+                if (fracDigits.isNotEmpty()) {
+                    extraMs = fracDigits.padEnd(3, '0').toLongOrNull() ?: 0L
+                }
+            }
+            baseMs + extraMs
         }.getOrNull()
     }
 }

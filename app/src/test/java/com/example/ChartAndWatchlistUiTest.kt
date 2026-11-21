@@ -3,8 +3,11 @@ package com.example
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -566,7 +569,8 @@ class ChartAndWatchlistUiTest {
         var entryAlertClicks = 0
         var slTpAlertClicks = 0
         var selectedProfile: com.example.domain.indicator.TbtMtfProfile? = null
-        var jumpedTfId: String? = null
+        var selectedHubTabId: String? = null
+        var addCustomTabClicks = 0
 
         val sampleCascade = com.example.domain.indicator.TbtMtfCascadeState(
             profile = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H,
@@ -671,7 +675,8 @@ class ChartAndWatchlistUiTest {
                         activeProfile = state.preferences.tbtMtfProfile,
                         activeTimeframeId = "15m",
                         onSelectMtfProfile = { selectedProfile = it },
-                        onSelectTimeframe = { jumpedTfId = it }
+                        onSelectHubTab = { selectedHubTabId = it },
+                        onAddCustomHubTabClick = { addCustomTabClicks++ }
                     )
                 }
             }
@@ -695,13 +700,17 @@ class ChartAndWatchlistUiTest {
         assertEquals(1, entryAlertClicks)
         assertEquals(1, slTpAlertClicks)
 
-        // Multi-Timeframe TBT HUB displays Cascade Banner, 1H/4H switcher, tappable TF chips, and short BPWR label
+        // Multi-Timeframe TBT HUB displays pure BULL/BEAR tiles (NO timeframe switching), 1H/4H/30m tabs, and + Tab button
         composeTestRule.onNodeWithTag("tbt_condition_hud").assertIsDisplayed()
         composeTestRule.onNodeWithTag("tbt_mtf_cascade_banner").assertIsDisplayed()
         composeTestRule.onNodeWithText("BUY READY • 3m/5m OK").assertIsDisplayed()
         composeTestRule.onNodeWithText("BPWR 91,250.50").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("tbt_hub_tf_3m").assertIsDisplayed().performClick()
-        assertEquals("3m", jumpedTfId)
+        composeTestRule.onNodeWithTag("tbt_hub_tf_3m").assertIsDisplayed().assertHasNoClickAction()
+        composeTestRule.onAllNodesWithText("▲ BULL").onFirst().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("tbt_hub_tab_30m").assertIsDisplayed().performClick()
+        assertEquals(com.example.domain.indicator.TbtMtfHubTab.DEFAULT_CUSTOM_30M.id, selectedHubTabId)
+        composeTestRule.onNodeWithTag("tbt_hub_add_tab_btn").assertIsDisplayed().performClick()
+        assertEquals(1, addCustomTabClicks)
         composeTestRule.onNodeWithTag("tbt_mtf_profile_4h").assertIsDisplayed().performClick()
         assertEquals(com.example.domain.indicator.TbtMtfProfile.SWING_4H, selectedProfile)
 
@@ -891,6 +900,9 @@ class ChartAndWatchlistUiTest {
             activeExchangeCount = 3,
             totalBuyVolume = 1_500_000.0,
             totalSellVolume = 350_000.0,
+            isPoc = true,
+            isBuyImbalance = true,
+            volumeRatio = 1.0,
             exchanges = listOf(
                 com.example.domain.indicator.ExchangeBucketBreakdown(
                     com.example.domain.indicator.SupportedExchange.BINANCE,
@@ -945,7 +957,7 @@ class ChartAndWatchlistUiTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithTag("multi_exch_indicator_tag").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Multi-Exch Vol & Traps").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Vol Footprint").assertIsDisplayed()
         composeTestRule.onNodeWithText("3/6").assertIsDisplayed()
         composeTestRule.onNodeWithTag("multi_exch_toggle_button").performClick()
         assertEquals(1, visibilityToggled)
@@ -959,13 +971,48 @@ class ChartAndWatchlistUiTest {
         composeTestRule.onNodeWithTag("multi_exch_cb_coinbase").assertIsDisplayed().performClick()
         assertEquals(com.example.domain.indicator.SupportedExchange.COINBASE, toggledExchange)
 
-        // Verify Tap Popup lists exchange names & Buy/Sell volumes
+        // Verify Footprint Tap Popup lists POC badge, Imbalance, and per-exchange Buy/Sell volumes
         composeTestRule.onNodeWithTag("multi_exch_level_popup").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("multi_exch_popup_poc_badge").assertIsDisplayed()
+        composeTestRule.onNodeWithText("BUY IMB").assertIsDisplayed()
         composeTestRule.onNodeWithTag("multi_exch_popup_row_binance").assertIsDisplayed()
         composeTestRule.onNodeWithTag("multi_exch_popup_row_bybit").assertIsDisplayed()
         composeTestRule.onNodeWithTag("multi_exch_popup_row_hyperliquid").assertIsDisplayed()
         composeTestRule.onNodeWithTag("multi_exch_popup_close").performClick()
         assertEquals(true, popupDismissed)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun `custom mtf hub tab dialog adds 30m 15m 10m 5m 2m tab and deletes saved tabs`() {
+        var addedName: String? = null
+        var addedTfs: List<String> = emptyList()
+        var deletedTabId: String? = null
+
+        composeTestRule.setContent {
+            BinanceProTheme {
+                com.example.ui.chart.AddCustomMtfHubTabContent(
+                    customTabs = listOf(com.example.domain.indicator.TbtMtfHubTab.DEFAULT_CUSTOM_30M),
+                    onAddTab = { name, tfs ->
+                        addedName = name
+                        addedTfs = tfs
+                    },
+                    onDeleteTab = { deletedTabId = it },
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("custom_mtf_hub_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("custom_mtf_tab_name_input").performTextInput("30m Scalp")
+        composeTestRule.onNodeWithTag("custom_mtf_delete_${com.example.domain.indicator.TbtMtfHubTab.DEFAULT_CUSTOM_30M.id}")
+            .performClick()
+        assertEquals(com.example.domain.indicator.TbtMtfHubTab.DEFAULT_CUSTOM_30M.id, deletedTabId)
+
+        composeTestRule.onNodeWithTag("custom_mtf_save_btn").performClick()
+        assertEquals("30m Scalp", addedName)
+        assertEquals(listOf("30m", "15m", "10m", "5m", "2m"), addedTfs)
     }
 
     @Test

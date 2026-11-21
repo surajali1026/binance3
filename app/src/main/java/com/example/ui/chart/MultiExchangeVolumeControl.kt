@@ -131,7 +131,7 @@ fun MultiExchangeVolumeControl(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
-                text = "Multi-Exch Vol & Traps",
+                text = "Vol Footprint",
                 style = MaterialTheme.typography.labelSmall,
                 color = if (!visible) TextMuted else CyanInfo,
                 fontWeight = FontWeight.Bold,
@@ -159,7 +159,7 @@ fun MultiExchangeVolumeControl(
             ) {
                 Icon(
                     imageVector = if (visible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                    contentDescription = if (visible) "Hide Multi-Exch Vol & Traps" else "Show Multi-Exch Vol & Traps",
+                    contentDescription = if (visible) "Hide Volume Footprint" else "Show Volume Footprint",
                     tint = if (visible) TextPrimary else TextMuted,
                     modifier = Modifier.size(15.dp)
                 )
@@ -211,7 +211,7 @@ fun MultiExchangeVolumeControl(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Exchanges & Trap Filters",
+                        text = "Volume Footprint & Traps",
                         style = MaterialTheme.typography.labelMedium,
                         color = TextPrimary,
                         fontWeight = FontWeight.Bold,
@@ -445,7 +445,8 @@ fun MultiExchangeLevelPopup(
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             Box(
                 modifier = Modifier
@@ -454,11 +455,32 @@ fun MultiExchangeLevelPopup(
                     .border(0.75.dp, accent, RoundedCornerShape(5.dp))
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
+                val badgeText = when {
+                    level.isBuyImbalance -> "BUY IMB"
+                    level.isSellImbalance -> "SELL IMB"
+                    else -> sideLabel
+                }
                 Text(
-                    text = "${level.dominantExchangeCount} EXCH • $sideLabel",
+                    text = badgeText,
                     style = TabularMonoStyle.copy(fontSize = 9.5.sp, fontWeight = FontWeight.ExtraBold),
                     color = accent
                 )
+            }
+            if (level.isPoc) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(AmberGold.copy(alpha = 0.22f))
+                        .border(0.75.dp, AmberGold, RoundedCornerShape(5.dp))
+                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                        .testTag("multi_exch_popup_poc_badge")
+                ) {
+                    Text(
+                        text = "POC",
+                        style = TabularMonoStyle.copy(fontSize = 9.sp, fontWeight = FontWeight.ExtraBold),
+                        color = AmberGold
+                    )
+                }
             }
             Spacer(modifier = Modifier.weight(1f))
             IconButton(
@@ -469,7 +491,7 @@ fun MultiExchangeLevelPopup(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
-                    contentDescription = "Close volume breakdown",
+                    contentDescription = "Close footprint breakdown",
                     tint = TextMuted,
                     modifier = Modifier.size(15.dp)
                 )
@@ -483,30 +505,38 @@ fun MultiExchangeLevelPopup(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Level: ${ChartNumberFormatter.formatPrice(level.priceLow, precision)} – ${ChartNumberFormatter.formatPrice(level.priceHigh, precision)}",
+                text = "Cluster: ${ChartNumberFormatter.formatPrice(level.priceLow, precision)} – ${ChartNumberFormatter.formatPrice(level.priceHigh, precision)}",
                 style = TabularMonoStyle.copy(fontSize = 10.sp),
                 color = TextMuted
             )
         }
 
-        // Totals Row
+        // Sell x Buy & Delta Summary Row
+        val deltaSign = if (level.delta >= 0.0) "+" else "-"
+        val deltaColor = if (level.delta >= 0.0) BullishGreen else BearishRed
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
                 .background(ToolbarSurface)
                 .padding(horizontal = 8.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
+                text = "Sell: ${ChartNumberFormatter.formatCompactVolume(level.totalSellVolume)}",
+                style = TabularMonoStyle.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                color = BearishRed
+            )
+            Text(
                 text = "Buy: ${ChartNumberFormatter.formatCompactVolume(level.totalBuyVolume)}",
-                style = TabularMonoStyle.copy(fontSize = 10.5.sp, fontWeight = FontWeight.Bold),
+                style = TabularMonoStyle.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
                 color = BullishGreen
             )
             Text(
-                text = "Sell: ${ChartNumberFormatter.formatCompactVolume(level.totalSellVolume)}",
-                style = TabularMonoStyle.copy(fontSize = 10.5.sp, fontWeight = FontWeight.Bold),
-                color = BearishRed
+                text = "Δ $deltaSign${ChartNumberFormatter.formatCompactVolume(kotlin.math.abs(level.delta))}",
+                style = TabularMonoStyle.copy(fontSize = 10.sp, fontWeight = FontWeight.ExtraBold),
+                color = deltaColor
             )
         }
 

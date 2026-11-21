@@ -1,6 +1,8 @@
 package com.example.domain.indicator
 
 import com.example.domain.model.Candle
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -76,14 +78,139 @@ enum class TbtMtfProfile(
         shortLabel = "4H",
         title = "4H Setup",
         timeframeIds = listOf("4H", "2H", "1H", "30m", "15m", "10m", "5m", "3m")
+    );
+
+    fun toHubTab(): TbtMtfHubTab = TbtMtfHubTab(
+        id = name,
+        name = shortLabel,
+        timeframeIds = timeframeIds,
+        isBuiltIn = true
     )
+}
+
+/**
+ * Represents a tab inside the Multi-Timeframe Content Hub (built-in 1H/4H or user custom tabs
+ * such as "30m" with ["30m", "15m", "10m", "5m", "2m"]).
+ */
+data class TbtMtfHubTab(
+    val id: String,
+    val name: String,
+    val timeframeIds: List<String>,
+    val isBuiltIn: Boolean = false
+) {
+    val anchorTimeframeId: String
+        get() = timeframeIds.firstOrNull() ?: "1H"
+
+    companion object {
+        val BUILT_IN_1H = TbtMtfProfile.INTRADAY_1H.toHubTab()
+        val BUILT_IN_4H = TbtMtfProfile.SWING_4H.toHubTab()
+        val DEFAULT_CUSTOM_30M = TbtMtfHubTab(
+            id = "custom_30m",
+            name = "30m",
+            timeframeIds = listOf("30m", "15m", "10m", "5m", "2m"),
+            isBuiltIn = false
+        )
+
+        val BUILT_IN_TABS: List<TbtMtfHubTab> = listOf(BUILT_IN_1H, BUILT_IN_4H)
+
+        fun allTabs(customTabs: List<TbtMtfHubTab>): List<TbtMtfHubTab> =
+            BUILT_IN_TABS + customTabs
+
+        fun normalizeTimeframeToken(raw: String): String? {
+            val cleaned = raw.trim().replace("min", "m", ignoreCase = true)
+                .replace("hr", "H", ignoreCase = true)
+                .replace("h", "H", ignoreCase = true)
+                .replace("d", "D", ignoreCase = true)
+            if (cleaned.isEmpty()) return null
+            val bareNum = cleaned.toIntOrNull()
+            if (bareNum != null && bareNum in 1..1440) {
+                return "${bareNum}m"
+            }
+            val match = Regex("^(\\d+)([mHD])$", RegexOption.IGNORE_CASE).matchEntire(cleaned) ?: return null
+            val amount = match.groupValues[1].toIntOrNull()?.coerceIn(1, 1440) ?: return null
+            val unitRaw = match.groupValues[2]
+            val suffix = when {
+                unitRaw.equals("m", ignoreCase = true) -> "m"
+                unitRaw.equals("H", ignoreCase = true) -> "H"
+                unitRaw.equals("D", ignoreCase = true) -> "D"
+                else -> return null
+            }
+            return "$amount$suffix"
+        }
+
+        fun durationMillisOf(tfId: String): Long {
+            val norm = normalizeTimeframeToken(tfId) ?: return 15L * 60_000L
+            val match = Regex("^(\\d+)([mHD])$").matchEntire(norm) ?: return 15L * 60_000L
+            val amount = match.groupValues[1].toLongOrNull() ?: 15L
+            return when (match.groupValues[2]) {
+                "m" -> amount * 60_000L
+                "H" -> amount * 3_600_000L
+                "D" -> amount * 86_400_000L
+                else -> amount * 60_000L
+            }
+        }
+
+        fun parseTimeframeList(rawInput: String): List<String> {
+            return rawInput
+                .split(Regex("[,\\s;/|]+"))
+                .mapNotNull { normalizeTimeframeToken(it) }
+                .distinctBy { it.lowercase(Locale.US) }
+                .sortedByDescending { durationMillisOf(it) }
+        }
+
+        fun serializeCustomTabs(tabs: List<TbtMtfHubTab>): String {
+            val arr = JSONArray()
+            tabs.filter { !it.isBuiltIn && it.timeframeIds.isNotEmpty() }.forEach { tab ->
+                val obj = JSONObject()
+                obj.put("id", tab.id)
+                obj.put("name", tab.name)
+                val tfs = JSONArray()
+                tab.timeframeIds.forEach { tfs.put(it) }
+                obj.put("tfs", tfs)
+                arr.put(obj)
+            }
+            return arr.toString()
+        }
+
+        fun deserializeCustomTabs(json: String?): List<TbtMtfHubTab> {
+            if (json == null || json.isBlank()) {
+                return listOf(DEFAULT_CUSTOM_30M)
+            }
+            return runCatching {
+                val arr = JSONArray(json)
+                val out = mutableListOf<TbtMtfHubTab>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val id = obj.optString("id").trim()
+                    val name = obj.optString("name").trim()
+                    val tfArr = obj.optJSONArray("tfs") ?: continue
+                    val tfs = mutableListOf<String>()
+                    for (j in 0 until tfArr.length()) {
+                        val tok = normalizeTimeframeToken(tfArr.optString(j))
+                        if (tok != null) tfs.add(tok)
+                    }
+                    if (id.isNotEmpty() && name.isNotEmpty() && tfs.isNotEmpty()) {
+                        out.add(
+                            TbtMtfHubTab(
+                                id = id,
+                                name = name,
+                                timeframeIds = tfs.distinctBy { it.lowercase(Locale.US) },
+                                isBuiltIn = false
+                            )
+                        )
+                    }
+                }
+                out
+            }.getOrElse { listOf(DEFAULT_CUSTOM_30M) }
+        }
+    }
 }
 
 enum class TbtCascadeAction(val badgeText: String) {
     BUY_READY("BUY READY"),
-    WAIT_BUY_CONFIRM("WAIT 3m/5m BUY"),
+    WAIT_BUY_CONFIRM("WAIT CONFIRM"),
     SELL_READY("SELL READY"),
-    WAIT_SELL_CONFIRM("WAIT 3m/5m SELL"),
+    WAIT_SELL_CONFIRM("WAIT CONFIRM"),
     MIXED_WAIT("MIXED")
 }
 
@@ -106,7 +233,9 @@ data class TbtMtfCascadeState(
     val headline: String,
     val alignedCount: Int,
     val totalCount: Int,
-    val htfBias: TbtMarketBias
+    val htfBias: TbtMarketBias,
+    val tabId: String = profile.name,
+    val tabName: String = profile.shortLabel
 )
 
 data class TbtChecklistItem(
@@ -164,8 +293,12 @@ data class TbtSmcConfig(
     val slBufferPct: Double = 0.05,
     val showVolImbalanceLine: Boolean = true,
     val showZoneTags: Boolean = true,
-    val mtfProfile: TbtMtfProfile = TbtMtfProfile.INTRADAY_1H
-)
+    val mtfProfile: TbtMtfProfile = TbtMtfProfile.INTRADAY_1H,
+    val activeHubTab: TbtMtfHubTab? = null
+) {
+    val effectiveHubTab: TbtMtfHubTab
+        get() = activeHubTab ?: mtfProfile.toHubTab()
+}
 
 data class TbtSmcOutput(
     val markers: List<TbtMarker> = emptyList(),
@@ -260,7 +393,7 @@ object TbtSmcEngine {
     }
 
     /**
-     * Computes a compact per-timeframe TBT SMC snapshot for the Multi-Timeframe Hub.
+     * Computes a compact per-timeframe Bullish / Bearish TBT SMC snapshot for the Multi-Timeframe Hub.
      */
     fun analyzeTimeframeSnapshot(
         tfId: String,
@@ -277,23 +410,29 @@ object TbtSmcEngine {
             )
         }
         val scan = runCoreScan(candles, config, htfAnalysis = null, buildVisuals = false)
-        val statusShort = when {
-            scan.recentBullConfirm -> "3CR+"
-            scan.recentBearConfirm -> "3CR-"
-            scan.lastDemandTapped -> "DEM*"
-            scan.lastSupplyTapped -> "SUP*"
-            scan.hasOverlapBuy && scan.bias == TbtMarketBias.BULLISH -> "OVL+"
-            scan.hasOverlapSell && scan.bias == TbtMarketBias.BEARISH -> "OVL-"
-            scan.activeBullPower != null -> "BPWR"
-            scan.activeBearPower != null -> "SPWR"
-            scan.nearDemandPoi -> "DEM"
-            scan.nearSupplyPoi -> "SUP"
-            else -> scan.bias.shortLabel
+        // Resolve decisive Bullish or Bearish signal per timeframe (use EMA/SMA direction if core scan is neutral)
+        val decisiveBias = if (scan.bias != TbtMarketBias.SIDEWAYS) {
+            scan.bias
+        } else {
+            val closes = candles.map { it.close }
+            val lastClose = closes.last()
+            val sma20 = closes.takeLast(20).average()
+            when {
+                lastClose > sma20 -> TbtMarketBias.BULLISH
+                lastClose < sma20 -> TbtMarketBias.BEARISH
+                candles.last().close >= candles.last().open -> TbtMarketBias.BULLISH
+                else -> TbtMarketBias.BEARISH
+            }
+        }
+        val statusShort = when (decisiveBias) {
+            TbtMarketBias.BULLISH -> "BULL"
+            TbtMarketBias.BEARISH -> "BEAR"
+            TbtMarketBias.SIDEWAYS -> "FLAT"
         }
         return TbtTimeframeSnapshot(
             tfId = tfId,
             label = tfId,
-            bias = scan.bias,
+            bias = decisiveBias,
             statusShort = statusShort,
             hasBuyConfirm = scan.recentBullConfirm,
             hasSellConfirm = scan.recentBearConfirm,
@@ -304,16 +443,25 @@ object TbtSmcEngine {
     }
 
     /**
-     * Evaluates the full TBT SMC Multi-Timeframe Cascade:
-     * - 1H Setup: 1H -> 30m -> 15m -> 10m -> wait 5m / 3m confirmation
-     * - 4H Setup: 4H -> 2H -> 1H -> 30m -> 15m -> 10m -> wait 5m / 3m confirmation
+     * Evaluates the full TBT SMC Multi-Timeframe Cascade for a built-in profile.
      */
     fun evaluateMtfCascade(
         profile: TbtMtfProfile,
         candlesByTf: Map<String, List<Candle>>,
         config: TbtSmcConfig = TbtSmcConfig()
+    ): TbtMtfCascadeState = evaluateMtfCascadeForTab(profile.toHubTab(), candlesByTf, config)
+
+    /**
+     * Evaluates the Multi-Timeframe Content Hub for ANY built-in or custom tab
+     * (e.g. 1H, 4H, or custom 30m: 30m -> 15m -> 10m -> 5m -> 2m).
+     */
+    fun evaluateMtfCascadeForTab(
+        tab: TbtMtfHubTab,
+        candlesByTf: Map<String, List<Candle>>,
+        config: TbtSmcConfig = TbtSmcConfig()
     ): TbtMtfCascadeState {
-        val snapshots = profile.timeframeIds.map { tfId ->
+        val tfIds = tab.timeframeIds.ifEmpty { TbtMtfProfile.INTRADAY_1H.timeframeIds }
+        val snapshots = tfIds.map { tfId ->
             val tfCandles = candlesByTf.entries
                 .firstOrNull { it.key.equals(tfId, ignoreCase = true) }
                 ?.value
@@ -321,71 +469,52 @@ object TbtSmcEngine {
             analyzeTimeframeSnapshot(tfId, tfCandles, config)
         }
 
-        val byId = snapshots.associateBy { it.tfId.uppercase(Locale.US) }
-        fun biasOf(id: String): TbtMarketBias = byId[id.uppercase(Locale.US)]?.bias ?: TbtMarketBias.SIDEWAYS
-        fun loadedOf(id: String): Boolean = byId[id.uppercase(Locale.US)]?.isLoaded == true
-
-        val snap3m = byId["3M"]
-        val snap5m = byId["5M"]
-        val ltfBuyConfirmed = (snap3m?.hasBuyConfirm == true) || (snap5m?.hasBuyConfirm == true)
-        val ltfSellConfirmed = (snap3m?.hasSellConfirm == true) || (snap5m?.hasSellConfirm == true)
-
-        val anchorBias: TbtMarketBias
-        val htfBullAligned: Boolean
-        val htfBearAligned: Boolean
-
-        when (profile) {
-            TbtMtfProfile.INTRADAY_1H -> {
-                val b1h = biasOf("1H")
-                val b30m = biasOf("30m")
-                val b15m = biasOf("15m")
-                anchorBias = b1h
-                htfBullAligned = loadedOf("1H") &&
-                    b1h == TbtMarketBias.BULLISH &&
-                    b30m == TbtMarketBias.BULLISH &&
-                    b15m == TbtMarketBias.BULLISH
-                htfBearAligned = loadedOf("1H") &&
-                    b1h == TbtMarketBias.BEARISH &&
-                    b30m == TbtMarketBias.BEARISH &&
-                    b15m == TbtMarketBias.BEARISH
-            }
-            TbtMtfProfile.SWING_4H -> {
-                val b4h = biasOf("4H")
-                val b2h = biasOf("2H")
-                val b1h = biasOf("1H")
-                val b30m = biasOf("30m")
-                val b15m = biasOf("15m")
-                anchorBias = b4h
-                htfBullAligned = loadedOf("4H") &&
-                    b4h == TbtMarketBias.BULLISH &&
-                    b2h != TbtMarketBias.BEARISH &&
-                    b1h == TbtMarketBias.BULLISH &&
-                    b30m == TbtMarketBias.BULLISH &&
-                    b15m == TbtMarketBias.BULLISH
-                htfBearAligned = loadedOf("4H") &&
-                    b4h == TbtMarketBias.BEARISH &&
-                    b2h != TbtMarketBias.BULLISH &&
-                    b1h == TbtMarketBias.BEARISH &&
-                    b30m == TbtMarketBias.BEARISH &&
-                    b15m == TbtMarketBias.BEARISH
-            }
+        val matchingProfile = when (tab.id) {
+            TbtMtfProfile.SWING_4H.name -> TbtMtfProfile.SWING_4H
+            else -> TbtMtfProfile.INTRADAY_1H
         }
+
+        // Partition timeframes into Higher/Structure TFs and Lowest 1-2 Confirmation TFs
+        val ltfCount = when {
+            snapshots.size >= 4 -> 2
+            snapshots.size >= 2 -> 1
+            else -> 0
+        }
+        val ltfSnapshots = if (ltfCount > 0) snapshots.takeLast(ltfCount) else emptyList()
+        val htfSnapshots = if (ltfCount > 0) snapshots.dropLast(ltfCount) else snapshots
+        val anchorSnap = snapshots.firstOrNull()
+        val anchorBias = anchorSnap?.bias ?: TbtMarketBias.SIDEWAYS
+        val anchorLoaded = anchorSnap?.isLoaded == true
+
+        val ltfBuyConfirmed = ltfSnapshots.any { it.isLoaded && it.hasBuyConfirm }
+        val ltfSellConfirmed = ltfSnapshots.any { it.isLoaded && it.hasSellConfirm }
+        val ltfLabel = ltfSnapshots.joinToString("/") { it.label }.ifBlank { "LTF" }
+
+        val htfBullAligned = anchorLoaded &&
+            anchorBias == TbtMarketBias.BULLISH &&
+            htfSnapshots.filter { it.isLoaded }.all { it.bias == TbtMarketBias.BULLISH } &&
+            htfSnapshots.count { it.isLoaded } >= max(1, (htfSnapshots.size + 1) / 2)
+
+        val htfBearAligned = anchorLoaded &&
+            anchorBias == TbtMarketBias.BEARISH &&
+            htfSnapshots.filter { it.isLoaded }.all { it.bias == TbtMarketBias.BEARISH } &&
+            htfSnapshots.count { it.isLoaded } >= max(1, (htfSnapshots.size + 1) / 2)
 
         val (action, headline) = when {
             htfBullAligned && ltfBuyConfirmed ->
-                TbtCascadeAction.BUY_READY to "BUY READY • 3m/5m OK"
+                TbtCascadeAction.BUY_READY to "BUY READY • $ltfLabel OK"
             htfBullAligned ->
-                TbtCascadeAction.WAIT_BUY_CONFIRM to "${profile.shortLabel}-15m BULL • Wait 3m/5m"
+                TbtCascadeAction.WAIT_BUY_CONFIRM to "${tab.name} BULL • Wait $ltfLabel"
             htfBearAligned && ltfSellConfirmed ->
-                TbtCascadeAction.SELL_READY to "SELL READY • 3m/5m OK"
+                TbtCascadeAction.SELL_READY to "SELL READY • $ltfLabel OK"
             htfBearAligned ->
-                TbtCascadeAction.WAIT_SELL_CONFIRM to "${profile.shortLabel}-15m BEAR • Wait 3m/5m"
+                TbtCascadeAction.WAIT_SELL_CONFIRM to "${tab.name} BEAR • Wait $ltfLabel"
             anchorBias == TbtMarketBias.BULLISH ->
-                TbtCascadeAction.MIXED_WAIT to "${profile.shortLabel} BULL • Wait 30m/15m"
+                TbtCascadeAction.MIXED_WAIT to "${tab.name} BULL • Mixed"
             anchorBias == TbtMarketBias.BEARISH ->
-                TbtCascadeAction.MIXED_WAIT to "${profile.shortLabel} BEAR • Wait 30m/15m"
+                TbtCascadeAction.MIXED_WAIT to "${tab.name} BEAR • Mixed"
             else ->
-                TbtCascadeAction.MIXED_WAIT to "${profile.shortLabel} RNG • Wait Bias"
+                TbtCascadeAction.MIXED_WAIT to "${tab.name} • Loading"
         }
 
         val loadedSnapshots = snapshots.filter { it.isLoaded }
@@ -401,13 +530,15 @@ object TbtSmcEngine {
         }
 
         return TbtMtfCascadeState(
-            profile = profile,
+            profile = matchingProfile,
             snapshots = snapshots,
             action = action,
             headline = headline,
             alignedCount = alignedCount,
             totalCount = snapshots.size,
-            htfBias = anchorBias
+            htfBias = anchorBias,
+            tabId = tab.id,
+            tabName = tab.name
         )
     }
 
@@ -483,18 +614,19 @@ object TbtSmcEngine {
         mtfCandlesByTf: Map<String, List<Candle>> = emptyMap(),
         activeTimeframeId: String? = null
     ): TbtSmcOutput {
+        val activeTab = config.effectiveHubTab
         val mtfCascade = if (mtfCandlesByTf.isNotEmpty()) {
-            evaluateMtfCascade(config.mtfProfile, mtfCandlesByTf, config)
+            evaluateMtfCascadeForTab(activeTab, mtfCandlesByTf, config)
         } else {
             null
         }
 
-        val resolvedHtfLabel = htfLabel ?: config.mtfProfile.shortLabel
+        val resolvedHtfLabel = htfLabel ?: activeTab.anchorTimeframeId
         val resolvedHtfCandles = if (htfCandles.size >= 20) {
             htfCandles
         } else {
             mtfCandlesByTf.entries
-                .firstOrNull { it.key.equals(config.mtfProfile.shortLabel, ignoreCase = true) }
+                .firstOrNull { it.key.equals(activeTab.anchorTimeframeId, ignoreCase = true) }
                 ?.value
                 .orEmpty()
         }
@@ -524,7 +656,7 @@ object TbtSmcEngine {
         val priceLines = scan.priceLines.toMutableList()
         val safeRR = config.targetRR.coerceIn(1.0, 20.0)
 
-        // If user is on a higher TF (>=15m) with no local open trade yet, surface the 3m/5m ready setup!
+        // If user is on a higher TF with no local open trade yet, surface the lowest TF ready setup!
         var chosenTrade = scan.openTrade
         var chosenViPrice = scan.viCandidatePrice
         var executionTfLabel = activeTimeframeId
@@ -532,7 +664,7 @@ object TbtSmcEngine {
             mtfCascade != null &&
             (mtfCascade.action == TbtCascadeAction.BUY_READY || mtfCascade.action == TbtCascadeAction.SELL_READY)
         ) {
-            val ltfCandidates = listOf("3m", "5m")
+            val ltfCandidates = activeTab.timeframeIds.takeLast(2).reversed().ifEmpty { listOf("3m", "5m") }
             for (ltfId in ltfCandidates) {
                 val ltfCandles = mtfCandlesByTf.entries
                     .firstOrNull { it.key.equals(ltfId, ignoreCase = true) }
@@ -545,7 +677,7 @@ object TbtSmcEngine {
                         (mtfCascade.action == TbtCascadeAction.BUY_READY && ltfTrade.isLong) ||
                             (mtfCascade.action == TbtCascadeAction.SELL_READY && !ltfTrade.isLong)
                         )
-                    if (matchesDirection && ltfTrade != null) {
+                    if (matchesDirection) {
                         chosenTrade = ltfTrade
                         chosenViPrice = ltfScan.viCandidatePrice
                         executionTfLabel = ltfId
@@ -586,7 +718,7 @@ object TbtSmcEngine {
 
             val cascadeCheckLabel = when {
                 mtfCascade != null ->
-                    "${mtfCascade.profile.shortLabel} MTF (${mtfCascade.alignedCount}/${mtfCascade.totalCount}) ${mtfCascade.action.badgeText}"
+                    "${mtfCascade.tabName} MTF (${mtfCascade.alignedCount}/${mtfCascade.totalCount}) ${mtfCascade.action.badgeText}"
                 htfBias != null ->
                     "$resolvedHtfLabel Bias (${htfBias.shortLabel})"
                 else ->

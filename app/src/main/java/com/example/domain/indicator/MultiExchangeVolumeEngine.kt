@@ -21,8 +21,8 @@ import kotlin.math.min
  */
 object MultiExchangeVolumeEngine {
 
-    private const val MAX_CANDLES_TO_EVALUATE = 36
-    private const val BUCKETS_PER_CANDLE = 4
+    private const val MAX_CANDLES_TO_EVALUATE = 32
+    private const val BUCKETS_PER_CANDLE = 6
 
     fun calculate(
         candles: List<Candle>,
@@ -34,6 +34,7 @@ object MultiExchangeVolumeEngine {
         if (candles.isEmpty() || selectedExchanges.isEmpty()) {
             return MultiExchangeVolumeOutput(
                 levels = emptyList(),
+                candleSummaries = emptyList(),
                 traps = emptyList(),
                 connectedExchanges = snapshot.connectedExchanges.intersect(selectedExchanges),
                 checkedExchanges = selectedExchanges,
@@ -72,7 +73,8 @@ object MultiExchangeVolumeEngine {
             }
         }
 
-        val allLevels = ArrayList<IntraCandleVolumeLevel>(windowCandles.size * 2)
+        val allLevels = ArrayList<IntraCandleVolumeLevel>(windowCandles.size * BUCKETS_PER_CANDLE)
+        val allSummaries = ArrayList<CandleFootprintSummary>(windowCandles.size)
         val allTraps = ArrayList<CandleTrapTag>()
 
         for (candle in windowCandles) {
@@ -116,10 +118,10 @@ object MultiExchangeVolumeEngine {
                 if (matchingFlows.isEmpty()) continue
                 var sumBuy = 0.0
                 var sumSell = 0.0
-                var flowOpen = matchingFlows.first().open
-                var flowClose = matchingFlows.last().close
-                var flowHigh = matchingFlows.maxOf { it.high }
-                var flowLow = matchingFlows.minOf { it.low }
+                val flowOpen = matchingFlows.first().open
+                val flowClose = matchingFlows.last().close
+                val flowHigh = matchingFlows.maxOf { it.high }
+                val flowLow = matchingFlows.minOf { it.low }
                 for (f in matchingFlows) {
                     sumBuy += f.buyQuoteVolume
                     sumSell += f.sellQuoteVolume
@@ -141,8 +143,13 @@ object MultiExchangeVolumeEngine {
                 )
             }
 
-            // Build intra-candle levels for this candle
-            val candleLevels = ArrayList<IntraCandleVolumeLevel>(bucketCount)
+            // Build complete intra-candle Volume Footprint ladder for this candle
+            val rawLevels = ArrayList<IntraCandleVolumeLevel>(bucketCount)
+            var candleTotalBuy = 0.0
+            var candleTotalSell = 0.0
+            var maxBucketVol = 0.0
+            var pocIdxInRaw = -1
+
             for (bIdx in 0 until bucketCount) {
                 val perEx = bucketMap[bIdx]
                 if (perEx.isEmpty()) continue
@@ -168,6 +175,10 @@ object MultiExchangeVolumeEngine {
                 }
                 if (breakdowns.isEmpty()) continue
 
+                val totalVol = totalBuy + totalSell
+                candleTotalBuy += totalBuy
+                candleTotalSell += totalSell
+
                 val dominantSide: DominanceSide
                 val dominantCount: Int
                 when {
@@ -189,16 +200,19 @@ object MultiExchangeVolumeEngine {
                     }
                 }
 
-                // Require meaningful directional dominance (>= 53% skew OR multi-exchange agreement)
-                val totalVol = totalBuy + totalSell
-                val domRatio = if (dominantSide == DominanceSide.BUY) totalBuy / totalVol else totalSell / totalVol
-                if (dominantCount < 1 || (dominantCount == 1 && domRatio < 0.54)) continue
+                val isBuyImbalance = totalBuy > 0.0 && (totalSell <= 0.0 || totalBuy >= totalSell * 2.0)
+                val isSellImbalance = totalSell > 0.0 && (totalBuy <= 0.0 || totalSell >= totalBuy * 2.0)
 
                 val pLow = candle.low + bIdx * bucketStep
                 val pHigh = pLow + bucketStep
                 val pMid = (pLow + pHigh) * 0.5
 
-                candleLevels.add(
+                if (totalVol > maxBucketVol) {
+                    maxBucketVol = totalVol
+                    pocIdxInRaw = rawLevels.size
+                }
+
+                rawLevels.add(
                     IntraCandleVolumeLevel(
                         id = "${candle.openTime}_$bIdx",
                         candleTimeMillis = candle.openTime,
@@ -212,23 +226,39 @@ object MultiExchangeVolumeEngine {
                         activeExchangeCount = breakdowns.size,
                         totalBuyVolume = totalBuy,
                         totalSellVolume = totalSell,
-                        exchanges = breakdowns.sortedByDescending { it.totalVolume }
+                        exchanges = breakdowns.sortedByDescending { it.totalVolume },
+                        isPoc = false,
+                        isBuyImbalance = isBuyImbalance,
+                        isSellImbalance = isSellImbalance,
+                        volumeRatio = 1.0
                     )
                 )
             }
 
-            if (candleLevels.isEmpty()) continue
+            if (rawLevels.isEmpty()) continue
 
-            // Keep top 2 most decisive levels per candle so chart stays crisp & readable on mobile
-            val prunedLevels = candleLevels
-                .sortedWith(
-                    compareByDescending<IntraCandleVolumeLevel> { it.dominantExchangeCount }
-                        .thenByDescending { it.totalBuyVolume + it.totalSellVolume }
+            val safeMaxVol = maxBucketVol.coerceAtLeast(1e-9)
+            val candleLevels = rawLevels.mapIndexed { idx, lvl ->
+                lvl.copy(
+                    isPoc = idx == pocIdxInRaw,
+                    volumeRatio = (lvl.totalVolume / safeMaxVol).coerceIn(0.08, 1.0)
                 )
-                .take(2)
-                .sortedBy { it.bucketIndex }
+            }
 
-            allLevels.addAll(prunedLevels)
+            allLevels.addAll(candleLevels)
+
+            val pocPrice = candleLevels.getOrNull(pocIdxInRaw)?.priceMid
+                ?: ((candle.high + candle.low) * 0.5)
+            allSummaries.add(
+                CandleFootprintSummary(
+                    candleTimeMillis = candle.openTime,
+                    candleLow = candle.low,
+                    candleHigh = candle.high,
+                    totalBuyVolume = candleTotalBuy,
+                    totalSellVolume = candleTotalSell,
+                    pocPriceMid = pocPrice
+                )
+            )
 
             // 3) Buyer Trap & Seller Trap Detection
             if (showTraps) {
@@ -238,6 +268,7 @@ object MultiExchangeVolumeEngine {
 
         return MultiExchangeVolumeOutput(
             levels = allLevels,
+            candleSummaries = allSummaries,
             traps = allTraps,
             connectedExchanges = connected,
             checkedExchanges = activeSelected,

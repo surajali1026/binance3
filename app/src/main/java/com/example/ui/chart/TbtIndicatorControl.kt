@@ -103,6 +103,8 @@ fun TbtIndicatorControl(
     onReplaySetSpeed: (Int) -> Unit,
     onReplayReset: () -> Unit,
     onSelectMtfProfile: (TbtMtfProfile) -> Unit = {},
+    onSelectHubTab: (String) -> Unit = {},
+    onAddCustomHubTabClick: () -> Unit = {},
     onCreateEntryAlert: (TbtTradeSetup, Boolean) -> Unit = { _, _ -> },
     onCreateSlTpAlerts: (TbtTradeSetup) -> Unit = {},
     modifier: Modifier = Modifier
@@ -414,50 +416,89 @@ fun TbtIndicatorControl(
                     }
                 }
 
-                // 2. MTF Cascade Trade Profile (1H Setup vs 4H Setup)
+                // 2. MTF Hub Setup Tabs (1H, 4H, 30m & Custom Tabs)
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text(
-                        text = "MTF Cascade Setup",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AmberGold,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 10.5.sp
-                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TbtMtfProfile.entries.forEach { profile ->
-                            val selected = prefs.tbtMtfProfile == profile
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (selected) BullishGreen.copy(alpha = 0.16f) else ElevatedSurface)
-                                    .border(
-                                        0.75.dp,
-                                        if (selected) BullishGreen else BorderSubtle,
-                                        RoundedCornerShape(6.dp)
+                        Text(
+                            text = "MTF Hub Tabs",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AmberGold,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.5.sp
+                        )
+                        Text(
+                            text = "+ Custom Tab",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CyanInfo,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable {
+                                    openSettings = false
+                                    onAddCustomHubTabClick()
+                                }
+                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                                .testTag("tbt_settings_add_custom_tab")
+                        )
+                    }
+                    val allTabs = prefs.allMtfHubTabs
+                    val activeTabId = prefs.activeMtfHubTab.id
+                    allTabs.chunked(2).forEach { tabPair ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            tabPair.forEach { tab ->
+                                val selected = tab.id == activeTabId
+                                val tag = when (tab.id) {
+                                    TbtMtfProfile.INTRADAY_1H.name -> "tbt_settings_profile_1h"
+                                    TbtMtfProfile.SWING_4H.name -> "tbt_settings_profile_4h"
+                                    else -> "tbt_settings_tab_${tab.name.lowercase()}"
+                                }
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (selected) BullishGreen.copy(alpha = 0.16f) else ElevatedSurface)
+                                        .border(
+                                            0.75.dp,
+                                            if (selected) BullishGreen else BorderSubtle,
+                                            RoundedCornerShape(6.dp)
+                                        )
+                                        .clickable {
+                                            onSelectHubTab(tab.id)
+                                            when (tab.id) {
+                                                TbtMtfProfile.INTRADAY_1H.name -> onSelectMtfProfile(TbtMtfProfile.INTRADAY_1H)
+                                                TbtMtfProfile.SWING_4H.name -> onSelectMtfProfile(TbtMtfProfile.SWING_4H)
+                                            }
+                                        }
+                                        .padding(horizontal = 6.dp, vertical = 5.dp)
+                                        .testTag(tag),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "${tab.name} Tab",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (selected) BullishGreen else TextPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.5.sp
                                     )
-                                    .clickable { onSelectMtfProfile(profile) }
-                                    .padding(horizontal = 6.dp, vertical = 5.dp)
-                                    .testTag("tbt_settings_profile_${profile.shortLabel.lowercase()}"),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    text = profile.title,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (selected) BullishGreen else TextPrimary,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 10.5.sp
-                                )
-                                Text(
-                                    text = if (profile == TbtMtfProfile.INTRADAY_1H) "1H→30m→15m→10m→3/5m" else "4H→2H→1H→30m→3/5m",
-                                    style = TabularMonoStyle.copy(fontSize = 8.sp),
-                                    color = TextMuted,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                    Text(
+                                        text = tab.timeframeIds.joinToString("→"),
+                                        style = TabularMonoStyle.copy(fontSize = 8.sp),
+                                        color = TextMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            if (tabPair.size == 1) {
+                                Spacer(modifier = Modifier.weight(1f))
                             }
                         }
                     }

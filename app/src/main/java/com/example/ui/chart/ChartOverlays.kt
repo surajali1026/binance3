@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ShowChart
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddAlert
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -87,6 +88,7 @@ import com.example.domain.indicator.TbtCascadeAction
 import com.example.domain.indicator.TbtConditionSummary
 import com.example.domain.indicator.TbtMarketBias
 import com.example.domain.indicator.TbtMtfCascadeState
+import com.example.domain.indicator.TbtMtfHubTab
 import com.example.domain.indicator.TbtMtfProfile
 import com.example.domain.indicator.TbtSmcConfig
 import com.example.domain.model.ChartDrawing
@@ -737,8 +739,11 @@ fun TbtConditionHudBadge(
     mtfCascade: TbtMtfCascadeState? = null,
     activeProfile: TbtMtfProfile = TbtMtfProfile.INTRADAY_1H,
     activeTimeframeId: String = "15m",
+    hubTabs: List<TbtMtfHubTab> = TbtMtfHubTab.allTabs(listOf(TbtMtfHubTab.DEFAULT_CUSTOM_30M)),
+    activeHubTabId: String = activeProfile.name,
     onSelectMtfProfile: (TbtMtfProfile) -> Unit = {},
-    onSelectTimeframe: (String) -> Unit = {},
+    onSelectHubTab: (String) -> Unit = {},
+    onAddCustomHubTabClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(true) }
@@ -758,7 +763,7 @@ fun TbtConditionHudBadge(
 
     Column(
         modifier = modifier
-            .widthIn(min = 148.dp, max = 216.dp)
+            .widthIn(min = 160.dp, max = 236.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(ElevatedSurface.copy(alpha = 0.90f))
             .border(0.75.dp, BorderSubtle, RoundedCornerShape(8.dp))
@@ -767,7 +772,7 @@ fun TbtConditionHudBadge(
             .testTag("tbt_condition_hud"),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        // Header Row: TBT HUB + 1H / 4H Setup Profile Switcher + Collapse Toggle
+        // Header Row: TBT HUB + Bias Pill + Add Custom Tab (+) + Collapse Toggle
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -784,37 +789,6 @@ fun TbtConditionHudBadge(
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 8.5.sp
                 )
-                TbtMtfProfile.entries.forEach { profile ->
-                    val selected = profile == activeProfile
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(if (selected) AmberGold.copy(alpha = 0.22f) else ToolbarSurface)
-                            .border(
-                                0.5.dp,
-                                if (selected) AmberGold else BorderSubtle,
-                                RoundedCornerShape(4.dp)
-                            )
-                            .clickable { onSelectMtfProfile(profile) }
-                            .padding(horizontal = 4.dp, vertical = 1.dp)
-                            .testTag("tbt_mtf_profile_${profile.shortLabel.lowercase()}")
-                    ) {
-                        Text(
-                            text = profile.shortLabel,
-                            style = TabularMonoStyle.copy(
-                                fontSize = 8.sp,
-                                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
-                            ),
-                            color = if (selected) AmberGold else TextMuted
-                        )
-                    }
-                }
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
@@ -826,6 +800,39 @@ fun TbtConditionHudBadge(
                         style = TabularMonoStyle.copy(fontSize = 7.5.sp, fontWeight = FontWeight.Bold),
                         color = biasColor
                     )
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(AmberGold.copy(alpha = 0.16f))
+                        .border(0.5.dp, AmberGold.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                        .clickable(onClick = onAddCustomHubTabClick)
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                        .testTag("tbt_hub_add_tab_btn"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(1.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Add,
+                            contentDescription = "Add Custom MTF Hub Tab",
+                            tint = AmberGold,
+                            modifier = Modifier.size(10.dp)
+                        )
+                        Text(
+                            text = "Tab",
+                            style = TabularMonoStyle.copy(fontSize = 7.5.sp, fontWeight = FontWeight.Bold),
+                            color = AmberGold
+                        )
+                    }
                 }
                 Icon(
                     imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
@@ -839,7 +846,55 @@ fun TbtConditionHudBadge(
             }
         }
 
-        // Cascade Action Banner (e.g., BUY READY • 3m/5m OK | 1H-15m BULL • Wait 3m/5m)
+        // Hub Tabs Strip (1H, 4H, 30m, and any user custom tabs — switches Hub view only, never switches chart TF)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            hubTabs.forEach { tab ->
+                val selected = tab.id == activeHubTabId
+                val profileTag = when (tab.id) {
+                    TbtMtfProfile.INTRADAY_1H.name -> "tbt_mtf_profile_1h"
+                    TbtMtfProfile.SWING_4H.name -> "tbt_mtf_profile_4h"
+                    else -> "tbt_hub_tab_${tab.name.lowercase()}"
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (selected) AmberGold.copy(alpha = 0.24f) else ToolbarSurface)
+                        .border(
+                            0.6.dp,
+                            if (selected) AmberGold else BorderSubtle,
+                            RoundedCornerShape(4.dp)
+                        )
+                        .clickable {
+                            onSelectHubTab(tab.id)
+                            when (tab.id) {
+                                TbtMtfProfile.INTRADAY_1H.name -> onSelectMtfProfile(TbtMtfProfile.INTRADAY_1H)
+                                TbtMtfProfile.SWING_4H.name -> onSelectMtfProfile(TbtMtfProfile.SWING_4H)
+                            }
+                        }
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .testTag(profileTag)
+                ) {
+                    Text(
+                        text = tab.name,
+                        style = TabularMonoStyle.copy(
+                            fontSize = 8.5.sp,
+                            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
+                        ),
+                        color = if (selected) AmberGold else TextMuted,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+        }
+
+        // Cascade Summary Banner (Bullish / Bearish alignment count)
         if (mtfCascade != null) {
             Row(
                 modifier = Modifier
@@ -870,9 +925,13 @@ fun TbtConditionHudBadge(
         }
 
         if (expanded) {
-            // Interactive Multi-Timeframe Matrix (3-col or 4-col compact grid)
+            // Read-Only Multi-Timeframe Bullish / Bearish Signal Grid (does NOT switch chart timeframe on tap)
             if (mtfCascade != null && mtfCascade.snapshots.isNotEmpty()) {
-                val cols = if (mtfCascade.snapshots.size <= 6) 3 else 4
+                val cols = when {
+                    mtfCascade.snapshots.size <= 3 -> mtfCascade.snapshots.size
+                    mtfCascade.snapshots.size <= 6 -> 3
+                    else -> 4
+                }
                 val rows = mtfCascade.snapshots.chunked(cols)
                 Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     rows.forEach { rowItems ->
@@ -887,21 +946,25 @@ fun TbtConditionHudBadge(
                                     snap.bias == TbtMarketBias.BEARISH -> BearishRed
                                     else -> AmberGold
                                 }
+                                val signalText = when {
+                                    !snap.isLoaded -> "..."
+                                    snap.bias == TbtMarketBias.BULLISH -> "▲ BULL"
+                                    snap.bias == TbtMarketBias.BEARISH -> "▼ BEAR"
+                                    else -> "FLAT"
+                                }
                                 val isCurrentTf = snap.tfId.equals(activeTimeframeId, ignoreCase = true)
                                 val borderColor = when {
-                                    isCurrentTf -> AmberGold
-                                    snap.hasBuyConfirm -> BullishGreen.copy(alpha = 0.7f)
-                                    snap.hasSellConfirm -> BearishRed.copy(alpha = 0.7f)
-                                    else -> snapColor.copy(alpha = 0.28f)
+                                    isCurrentTf -> AmberGold.copy(alpha = 0.85f)
+                                    snap.isLoaded -> snapColor.copy(alpha = 0.45f)
+                                    else -> BorderSubtle
                                 }
                                 Column(
                                     modifier = Modifier
                                         .weight(1f)
                                         .clip(RoundedCornerShape(4.dp))
-                                        .background(snapColor.copy(alpha = if (isCurrentTf) 0.20f else 0.10f))
-                                        .border(if (isCurrentTf) 1.dp else 0.5.dp, borderColor, RoundedCornerShape(4.dp))
-                                        .clickable { onSelectTimeframe(snap.tfId) }
-                                        .padding(horizontal = 3.dp, vertical = 2.dp)
+                                        .background(snapColor.copy(alpha = if (snap.isLoaded) 0.14f else 0.08f))
+                                        .border(if (isCurrentTf) 0.9.dp else 0.5.dp, borderColor, RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 3.dp, vertical = 2.5.dp)
                                         .testTag("tbt_hub_tf_${snap.tfId.lowercase()}"),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
@@ -916,7 +979,7 @@ fun TbtConditionHudBadge(
                                         softWrap = false
                                     )
                                     Text(
-                                        text = snap.statusShort,
+                                        text = signalText,
                                         style = TabularMonoStyle.copy(
                                             fontSize = 7.5.sp,
                                             fontWeight = FontWeight.ExtraBold

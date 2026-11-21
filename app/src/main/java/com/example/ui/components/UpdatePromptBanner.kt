@@ -1,7 +1,7 @@
 package com.example.ui.components
 
 import android.content.Intent
-import android.net.Uri
+import androidx.core.net.toUri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -65,7 +65,7 @@ fun UpdatePromptBanner(
             onDownloadClick()
         } else {
             runCatching {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(release.downloadUrl)).apply {
+                val intent = Intent(Intent.ACTION_VIEW, release.downloadUrl.toUri()).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(intent)

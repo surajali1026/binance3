@@ -223,6 +223,8 @@ data class ChartPreferencesEntity(
     val tbtShowVolImbalanceLine: Boolean = true,
     val tbtShowZoneTags: Boolean = true,
     val tbtMtfProfile: String = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H.name,
+    val tbtActiveHubTabId: String = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H.name,
+    val tbtCustomHubTabsJson: String = "",
     val showMultiExchVol: Boolean = true,
     val multiExchShowTraps: Boolean = true,
     val multiExchSelectedCsv: String = com.example.domain.indicator.SupportedExchange.DEFAULT_CSV
@@ -256,6 +258,8 @@ data class ChartPreferencesEntity(
         tbtMtfProfile = runCatching {
             com.example.domain.indicator.TbtMtfProfile.valueOf(tbtMtfProfile)
         }.getOrDefault(com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H),
+        tbtActiveHubTabId = tbtActiveHubTabId.ifBlank { tbtMtfProfile },
+        tbtCustomHubTabs = com.example.domain.indicator.TbtMtfHubTab.deserializeCustomTabs(tbtCustomHubTabsJson),
         showMultiExchVol = showMultiExchVol,
         multiExchShowTraps = multiExchShowTraps,
         multiExchSelectedExchanges = com.example.domain.indicator.SupportedExchange.parseCsv(multiExchSelectedCsv)
@@ -290,6 +294,8 @@ data class ChartPreferencesEntity(
             tbtShowVolImbalanceLine = prefs.tbtShowVolImbalanceLine,
             tbtShowZoneTags = prefs.tbtShowZoneTags,
             tbtMtfProfile = prefs.tbtMtfProfile.name,
+            tbtActiveHubTabId = prefs.tbtActiveHubTabId,
+            tbtCustomHubTabsJson = com.example.domain.indicator.TbtMtfHubTab.serializeCustomTabs(prefs.tbtCustomHubTabs),
             showMultiExchVol = prefs.showMultiExchVol,
             multiExchShowTraps = prefs.multiExchShowTraps,
             multiExchSelectedCsv = com.example.domain.indicator.SupportedExchange.toCsv(prefs.multiExchSelectedExchanges)

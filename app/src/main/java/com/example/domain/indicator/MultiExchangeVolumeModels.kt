@@ -118,7 +118,8 @@ data class ExchangeBucketBreakdown(
 }
 
 /**
- * Aggregated intra-candle price level/bucket with Green/Red dominance and checked-exchange count.
+ * Aggregated intra-candle Volume Footprint price level/row with Bid(Sell) x Ask(Buy) volume,
+ * POC (Point of Control), imbalance flags, heatmap ratio, and per-exchange breakdown.
  */
 data class IntraCandleVolumeLevel(
     val id: String,
@@ -133,8 +134,30 @@ data class IntraCandleVolumeLevel(
     val activeExchangeCount: Int,
     val totalBuyVolume: Double,
     val totalSellVolume: Double,
-    val exchanges: List<ExchangeBucketBreakdown>
-)
+    val exchanges: List<ExchangeBucketBreakdown>,
+    val isPoc: Boolean = false,
+    val isBuyImbalance: Boolean = false,
+    val isSellImbalance: Boolean = false,
+    val volumeRatio: Double = 1.0
+) {
+    val totalVolume: Double get() = totalBuyVolume + totalSellVolume
+    val delta: Double get() = totalBuyVolume - totalSellVolume
+}
+
+/**
+ * Per-candle Volume Footprint summary (total Buy/Sell, Delta, and POC price).
+ */
+data class CandleFootprintSummary(
+    val candleTimeMillis: Long,
+    val candleLow: Double,
+    val candleHigh: Double,
+    val totalBuyVolume: Double,
+    val totalSellVolume: Double,
+    val pocPriceMid: Double
+) {
+    val totalVolume: Double get() = totalBuyVolume + totalSellVolume
+    val delta: Double get() = totalBuyVolume - totalSellVolume
+}
 
 data class CandleTrapTag(
     val id: String,
@@ -148,6 +171,7 @@ data class CandleTrapTag(
 
 data class MultiExchangeVolumeOutput(
     val levels: List<IntraCandleVolumeLevel> = emptyList(),
+    val candleSummaries: List<CandleFootprintSummary> = emptyList(),
     val traps: List<CandleTrapTag> = emptyList(),
     val connectedExchanges: Set<SupportedExchange> = emptySet(),
     val checkedExchanges: Set<SupportedExchange> = emptySet(),
