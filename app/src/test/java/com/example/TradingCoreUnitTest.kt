@@ -511,13 +511,13 @@ class TradingCoreUnitTest {
             isClosed = true
         )
 
-        // 1. Less than 25 candles -> Waiting for data
+        // 1. Less than 25 candles -> Wait...
         val shortList = (0 until 20).map { i -> bar(i, 100.0, 101.0, 99.0, 100.5) }
         val shortOut = com.example.domain.indicator.TbtSmcEngine.calculate(shortList)
         assertTrue(shortOut.markers.isEmpty())
         assertTrue(shortOut.priceLines.isEmpty())
         assertEquals(com.example.domain.indicator.TbtMarketBias.SIDEWAYS, shortOut.summary.bias)
-        assertEquals("Waiting for data...", shortOut.summary.lastSignal)
+        assertEquals("Wait...", shortOut.summary.lastSignal)
 
         // 2. Construct deterministic sequence >= 28 candles:
         // Bars 0..15: tight range around 100 (avg body ~0.6)
@@ -529,14 +529,14 @@ class TradingCoreUnitTest {
         }
         // Bar 16: small bearish base candle (body = 0.2 < avgBody*0.9)
         candles.add(bar(16, 100.0, 100.2, 99.5, 99.8))
-        // Bar 17: huge bullish impulse (body = 4.2 > avgBody*1.3, close 104.3 > c1.high 100.2) -> DBR Demand (top=100.0, bottom=99.5)
+        // Bar 17: huge bullish impulse (body = 4.2 > avgBody*1.3, close 104.3 > c1.high 100.2) -> DBR DEM (top=100.0, bottom=99.5)
         candles.add(bar(17, 100.1, 104.3, 100.1, 104.3))
         // Bar 18..20: drift above zone
         candles.add(bar(18, 104.0, 104.4, 103.0, 103.5))
         candles.add(bar(19, 103.5, 103.8, 102.0, 102.2))
         // Bar 20: taps demand zone (low 99.6 <= 100.0 and close 101.0 > bottom 99.5) -> sets activeBullPower = 99.6
         candles.add(bar(20, 102.0, 102.2, 99.6, 101.0))
-        // Bar 21..24: 3CR BUY setup (bar 21 bearish, bar 22 sweeps low, bar 23 closes > max(c1.high, c2.high) opening cleanly above base top) & rally for BULLISH bias
+        // Bar 21..24: 3CR BUY setup & rally for BULLISH bias
         candles.add(bar(21, 101.5, 102.0, 100.5, 100.6))
         candles.add(bar(22, 100.6, 101.5, 100.1, 101.2))
         candles.add(bar(23, 101.3, 105.5, 101.3, 105.0))
@@ -545,8 +545,8 @@ class TradingCoreUnitTest {
 
         val fullOut = com.example.domain.indicator.TbtSmcEngine.calculate(candles)
         assertTrue(fullOut.zones.any { it.type == com.example.domain.indicator.TbtZoneType.DEMAND && it.tapped })
-        assertTrue(fullOut.priceLines.any { it.title.contains("Demand") && it.title.contains("Tapped") })
-        assertTrue(fullOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.POWER_SHIFT })
+        assertTrue(fullOut.priceLines.any { it.title.contains("DEM*") })
+        assertTrue(fullOut.priceLines.any { it.category == com.example.domain.indicator.TbtPriceLineCategory.POWER_SHIFT && it.title == "BPWR" })
         assertEquals(99.6, fullOut.summary.activeBullPower!!, 0.0001)
         assertTrue(fullOut.markers.any { it.text == "3CR BUY" })
         assertTrue(fullOut.markers.none { it.text == "BOS" || it.text == "CHoCH" })
@@ -722,5 +722,89 @@ class TradingCoreUnitTest {
         // Verify silence gap between pulse 1 (ends 210ms) and pulse 2 (starts 310ms)
         val gapSample = pcm[(44_100 * 260) / 1000]
         assertEquals(0, gapSample.toInt())
+    }
+
+    @Test
+    fun `tbt smc mtf cascade handles 1H and 4H setups with 3m 5m confirmation and default all-tf visibility`() {
+        // 1. Indicator is visible on ALL timeframes (including 1H and 4H) by default
+        val defaultPrefs = com.example.domain.model.ChartPreferences()
+        assertFalse(defaultPrefs.tbtAutoHideOnHtf)
+        val tf1h = Timeframe.DEFAULTS.first { it.id == "1H" }
+        val tf4h = Timeframe.DEFAULTS.first { it.id == "4H" }
+        assertTrue(com.example.ui.chart.ChartUiState(activeTimeframe = tf1h, preferences = defaultPrefs).isTbtEffectivelyVisible)
+        assertTrue(com.example.ui.chart.ChartUiState(activeTimeframe = tf4h, preferences = defaultPrefs).isTbtEffectivelyVisible)
+
+        val baseTime = 1_750_000_000_000L
+        fun bullTrendSeries(stepMs: Long): List<Candle> = (0 until 30).map { i ->
+            val o = 100.0 + i * 0.9
+            Candle(
+                openTime = baseTime + i * stepMs,
+                closeTime = baseTime + (i + 1) * stepMs - 1L,
+                open = o,
+                high = o + 1.2,
+                low = o - 0.3,
+                close = o + 0.9,
+                volume = 1500.0,
+                isClosed = true
+            )
+        }
+
+        fun bullWith3crTrigger(stepMs: Long): List<Candle> {
+            val list = mutableListOf<Candle>()
+            for (i in 0..24) {
+                val o = 100.0 + i * 0.4
+                list.add(Candle(baseTime + i * stepMs, baseTime + (i + 1) * stepMs - 1L, o, o + 0.8, o - 0.3, o + 0.4, 1200.0, true))
+            }
+            // Bars 25..27: clean 3CR BUY with strong displacement body
+            list.add(Candle(baseTime + 25 * stepMs, baseTime + 26 * stepMs - 1L, 110.5, 110.7, 109.2, 109.4, 1100.0, true))
+            list.add(Candle(baseTime + 26 * stepMs, baseTime + 27 * stepMs - 1L, 109.4, 109.8, 108.6, 109.6, 1300.0, true))
+            list.add(Candle(baseTime + 27 * stepMs, baseTime + 28 * stepMs - 1L, 109.7, 112.2, 109.6, 112.0, 2400.0, true))
+            return list
+        }
+
+        // 2. 1H Setup: 1H, 30m, 15m bullish but 3m/5m NOT yet triggered -> WAIT_BUY_CONFIRM
+        val bullSeriesNoTrigger = bullTrendSeries(300_000L)
+        val waitMap = mapOf(
+            "1H" to bullTrendSeries(3_600_000L),
+            "30m" to bullTrendSeries(1_800_000L),
+            "15m" to bullTrendSeries(900_000L),
+            "10m" to bullTrendSeries(600_000L),
+            "5m" to bullSeriesNoTrigger,
+            "3m" to bullSeriesNoTrigger
+        )
+        val waitCascade = com.example.domain.indicator.TbtSmcEngine.evaluateMtfCascade(
+            profile = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H,
+            candlesByTf = waitMap
+        )
+        assertEquals(6, waitCascade.snapshots.size)
+        assertEquals(com.example.domain.indicator.TbtCascadeAction.WAIT_BUY_CONFIRM, waitCascade.action)
+
+        // 3. Once 3m prints 3CR BUY -> BUY_READY and actionable 3m setup surfaces even on 1H chart!
+        val readyMap = waitMap + ("3m" to bullWith3crTrigger(180_000L))
+        val outOn1H = com.example.domain.indicator.TbtSmcEngine.calculate(
+            candles = waitMap["1H"]!!,
+            config = com.example.domain.indicator.TbtSmcConfig(mtfProfile = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H),
+            mtfCandlesByTf = readyMap,
+            activeTimeframeId = "1H"
+        )
+        assertEquals(com.example.domain.indicator.TbtCascadeAction.BUY_READY, outOn1H.mtfCascade?.action)
+        assertNotNull("Expected surfaced 3m BUY setup on 1H chart", outOn1H.activeSetup)
+        assertEquals("3m", outOn1H.activeSetup?.executionTf)
+        assertEquals(com.example.domain.indicator.TbtTradeDirection.BUY, outOn1H.activeSetup?.direction)
+        assertTrue(outOn1H.priceLines.any { it.title == "BUY" })
+        assertTrue(outOn1H.priceLines.any { it.title == "SL" })
+        assertTrue(outOn1H.priceLines.any { it.title == "TP 3R" })
+
+        // 4. 4H Swing Setup: 4H -> 2H -> 1H -> 30m -> 15m -> 10m -> 5m -> 3m (all 8 timeframes)
+        val swingMap = readyMap + mapOf(
+            "4H" to bullTrendSeries(14_400_000L),
+            "2H" to bullTrendSeries(7_200_000L)
+        )
+        val swingCascade = com.example.domain.indicator.TbtSmcEngine.evaluateMtfCascade(
+            profile = com.example.domain.indicator.TbtMtfProfile.SWING_4H,
+            candlesByTf = swingMap
+        )
+        assertEquals(8, swingCascade.snapshots.size)
+        assertEquals(com.example.domain.indicator.TbtCascadeAction.BUY_READY, swingCascade.action)
     }
 }

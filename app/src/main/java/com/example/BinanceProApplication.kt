@@ -163,7 +163,8 @@ class BinanceProApplication : Application(), androidx.work.Configuration.Provide
                 AlertScheduler.syncBackgroundMonitoring(
                     context = this@BinanceProApplication,
                     hasActiveAlerts = hasActiveAlerts,
-                    backgroundMonitorEnabled = bgEnabled
+                    backgroundMonitorEnabled = bgEnabled,
+                    fromBackground = true
                 )
             }
         }

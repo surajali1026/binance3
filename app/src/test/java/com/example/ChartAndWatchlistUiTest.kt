@@ -565,11 +565,30 @@ class ChartAndWatchlistUiTest {
         var selectedSpeed = 0
         var entryAlertClicks = 0
         var slTpAlertClicks = 0
+        var selectedProfile: com.example.domain.indicator.TbtMtfProfile? = null
+        var jumpedTfId: String? = null
+
+        val sampleCascade = com.example.domain.indicator.TbtMtfCascadeState(
+            profile = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H,
+            snapshots = listOf(
+                com.example.domain.indicator.TbtTimeframeSnapshot("1H", "1H", com.example.domain.indicator.TbtMarketBias.BULLISH, "DEM*"),
+                com.example.domain.indicator.TbtTimeframeSnapshot("30m", "30m", com.example.domain.indicator.TbtMarketBias.BULLISH, "OVL+"),
+                com.example.domain.indicator.TbtTimeframeSnapshot("15m", "15m", com.example.domain.indicator.TbtMarketBias.BULLISH, "BPWR"),
+                com.example.domain.indicator.TbtTimeframeSnapshot("10m", "10m", com.example.domain.indicator.TbtMarketBias.BULLISH, "BULL"),
+                com.example.domain.indicator.TbtTimeframeSnapshot("5m", "5m", com.example.domain.indicator.TbtMarketBias.BULLISH, "3CR+", hasBuyConfirm = true),
+                com.example.domain.indicator.TbtTimeframeSnapshot("3m", "3m", com.example.domain.indicator.TbtMarketBias.BULLISH, "3CR+", hasBuyConfirm = true)
+            ),
+            action = com.example.domain.indicator.TbtCascadeAction.BUY_READY,
+            headline = "BUY READY • 3m/5m OK",
+            alignedCount = 6,
+            totalCount = 6,
+            htfBias = com.example.domain.indicator.TbtMarketBias.BULLISH
+        )
 
         val sampleSetup = com.example.domain.indicator.TbtTradeSetup(
             direction = com.example.domain.indicator.TbtTradeDirection.BUY,
             triggerName = "3CR BUY",
-            reason = "Demand/Overlap Tap + Power Shift + 3CR BUY",
+            reason = "DEM/OVL + SPWR + 3CR BUY",
             grade = "A+",
             score = 5,
             entryPrice = 91500.0,
@@ -580,13 +599,15 @@ class ChartAndWatchlistUiTest {
             riskPercent = 0.44,
             htfLabel = "1H",
             htfBias = com.example.domain.indicator.TbtMarketBias.BULLISH,
+            cascadeAction = com.example.domain.indicator.TbtCascadeAction.BUY_READY,
+            executionTf = "3m",
             volumeConfirmed = true,
             checklist = listOf(
-                com.example.domain.indicator.TbtChecklistItem("1H API Trend (BULLISH)", true),
-                com.example.domain.indicator.TbtChecklistItem("Demand/Supply or Overlap POI", true),
-                com.example.domain.indicator.TbtChecklistItem("TBT Power Shift Control", true),
+                com.example.domain.indicator.TbtChecklistItem("1H MTF (6/6) BUY READY", true),
+                com.example.domain.indicator.TbtChecklistItem("DEM/SUP or OVL POI", true),
+                com.example.domain.indicator.TbtChecklistItem("BPWR / SPWR Shift", true),
                 com.example.domain.indicator.TbtChecklistItem("Trigger: 3CR BUY", true),
-                com.example.domain.indicator.TbtChecklistItem("Binance Volume Confirmation", true)
+                com.example.domain.indicator.TbtChecklistItem("Volume Conf", true)
             )
         )
 
@@ -595,7 +616,7 @@ class ChartAndWatchlistUiTest {
             contract = FuturesContract("BTCUSDT", "BTCUSDT", "BTC", "USDT", 2, 3, 0.1, "PERPETUAL", "TRADING"),
             activeTimeframe = com.example.domain.model.Timeframe.DEFAULTS.first { it.id == "15m" },
             replayState = com.example.domain.model.BarReplayState(isActive = true, cutoffIndex = 40, isPlaying = false, speedMultiplier = 2),
-            preferences = com.example.domain.model.ChartPreferences(showTbtSmc = true, tbtAutoHideOnHtf = true, tbtShowSignals = true),
+            preferences = com.example.domain.model.ChartPreferences(showTbtSmc = true, tbtAutoHideOnHtf = false, tbtShowSignals = true),
             tbtSmc = com.example.domain.indicator.TbtSmcOutput(
                 summary = com.example.domain.indicator.TbtConditionSummary(
                     bias = com.example.domain.indicator.TbtMarketBias.BULLISH,
@@ -603,7 +624,7 @@ class ChartAndWatchlistUiTest {
                     htfBias = com.example.domain.indicator.TbtMarketBias.BULLISH,
                     activeBullPower = 91250.5,
                     activeBearPower = null,
-                    lastSignal = "3CR BUY Confirmed"
+                    lastSignal = "3CR BUY"
                 ),
                 backtestReport = com.example.domain.indicator.TbtBacktestReport(
                     totalTrades = 6,
@@ -612,7 +633,8 @@ class ChartAndWatchlistUiTest {
                     winRate = 67,
                     netR = 10.0
                 ),
-                activeSetup = sampleSetup
+                activeSetup = sampleSetup,
+                mtfCascade = sampleCascade
             )
         )
 
@@ -638,12 +660,18 @@ class ChartAndWatchlistUiTest {
                         onReplayStepForward = { nextSteps++ },
                         onReplaySetSpeed = { selectedSpeed = it },
                         onReplayReset = { resetClicks++ },
+                        onSelectMtfProfile = { selectedProfile = it },
                         onCreateEntryAlert = { _, _ -> entryAlertClicks++ },
                         onCreateSlTpAlerts = { slTpAlertClicks++ }
                     )
                     com.example.ui.chart.TbtConditionHudBadge(
                         summary = state.tbtSmc.summary,
-                        precision = 2
+                        precision = 2,
+                        mtfCascade = state.tbtSmc.mtfCascade,
+                        activeProfile = state.preferences.tbtMtfProfile,
+                        activeTimeframeId = "15m",
+                        onSelectMtfProfile = { selectedProfile = it },
+                        onSelectTimeframe = { jumpedTfId = it }
                     )
                 }
             }
@@ -667,20 +695,27 @@ class ChartAndWatchlistUiTest {
         assertEquals(1, entryAlertClicks)
         assertEquals(1, slTpAlertClicks)
 
-        // Floating HUD displays HTF API bias, active power level, and last signal
+        // Multi-Timeframe TBT HUB displays Cascade Banner, 1H/4H switcher, tappable TF chips, and short BPWR label
         composeTestRule.onNodeWithTag("tbt_condition_hud").assertIsDisplayed()
-        composeTestRule.onNodeWithText("HTF 1H: BULLISH").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Bull Pwr: 91,250.50").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("tbt_mtf_cascade_banner").assertIsDisplayed()
+        composeTestRule.onNodeWithText("BUY READY • 3m/5m OK").assertIsDisplayed()
+        composeTestRule.onNodeWithText("BPWR 91,250.50").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("tbt_hub_tf_3m").assertIsDisplayed().performClick()
+        assertEquals("3m", jumpedTfId)
+        composeTestRule.onNodeWithTag("tbt_mtf_profile_4h").assertIsDisplayed().performClick()
+        assertEquals(com.example.domain.indicator.TbtMtfProfile.SWING_4H, selectedProfile)
 
         // Eye toggle works
         composeTestRule.onNodeWithTag("tbt_smc_toggle_button").assertIsDisplayed().performClick()
         assertEquals(1, mainToggled)
 
-        // Settings panel opens with Replay & pure TBT SMC Strategy controls (no ICT Killzone)
+        // Settings panel opens with Replay, MTF Setup Switcher, & pure TBT SMC controls (no ICT Killzone)
         composeTestRule.onNodeWithTag("tbt_smc_settings_button").assertIsDisplayed().performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("tbt_smc_settings_panel").assertIsDisplayed()
         composeTestRule.onNodeWithText("ICT Killzone Filter").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("tbt_settings_profile_1h").assertIsDisplayed().performClick()
+        assertEquals(com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H, selectedProfile)
         composeTestRule.onNodeWithTag("tbt_replay_prev_btn").performClick()
         composeTestRule.onNodeWithTag("tbt_replay_next_btn").performClick()
         composeTestRule.onNodeWithTag("tbt_replay_speed_5x").performClick()

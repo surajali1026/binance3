@@ -92,7 +92,7 @@ fun ChartScreen(
         onResult = { /* Alert works in-app regardless; notification posts if granted */ }
     )
 
-    fun requestCreateAlert(price: Double, linkedDrawing: ChartDrawing? = null) {
+    fun ensureNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
                 context,
@@ -102,6 +102,10 @@ fun ChartScreen(
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
+    }
+
+    fun requestCreateAlert(price: Double, linkedDrawing: ChartDrawing? = null) {
+        ensureNotificationPermission()
         createAlertRequest = price to linkedDrawing
     }
 
@@ -279,14 +283,21 @@ fun ChartScreen(
                 onReplayStepForward = viewModel::stepReplayForward,
                 onReplaySetSpeed = viewModel::setReplaySpeed,
                 onReplayReset = viewModel::resetReplay,
-                onCreateEntryAlert = viewModel::createTbtEntryAlert,
-                onCreateSlTpAlerts = viewModel::createTbtSlTpAlerts,
+                onSelectMtfProfile = viewModel::selectMtfProfile,
+                onCreateEntryAlert = { setup, useRetrace ->
+                    ensureNotificationPermission()
+                    viewModel.createTbtEntryAlert(setup, useRetrace)
+                },
+                onCreateSlTpAlerts = { setup ->
+                    ensureNotificationPermission()
+                    viewModel.createTbtSlTpAlerts(setup)
+                },
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(top = tbtTopOffset, start = 8.dp)
             )
 
-            // Top-Right TBT Real SMC Market Condition HUD Badge
+            // Top-Right TBT SMC Multi-Timeframe Content Hub (1H Setup & 4H Setup)
             if (state.isTbtEffectivelyVisible &&
                 state.preferences.tbtShowHud &&
                 state.displayedCandles.isNotEmpty()
@@ -299,6 +310,11 @@ fun ChartScreen(
                 TbtConditionHudBadge(
                     summary = state.tbtSmc.summary,
                     precision = state.contract?.pricePrecision ?: 2,
+                    mtfCascade = state.tbtSmc.mtfCascade,
+                    activeProfile = state.preferences.tbtMtfProfile,
+                    activeTimeframeId = state.activeTimeframe.id,
+                    onSelectMtfProfile = viewModel::selectMtfProfile,
+                    onSelectTimeframe = viewModel::jumpToMtfTimeframe,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = hudTopOffset, end = 74.dp)

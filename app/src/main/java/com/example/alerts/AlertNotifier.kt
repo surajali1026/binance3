@@ -28,7 +28,7 @@ import kotlin.math.min
 import kotlin.math.sin
 
 object AlertNotifier {
-    const val CHANNEL_ALERTS = "binance_pro_price_alerts_loud_beep_v2"
+    const val CHANNEL_ALERTS = "binance_pro_price_alerts_alarm_v3"
     const val CHANNEL_SERVICE = "binance_pro_monitor_service"
     const val SERVICE_NOTIFICATION_ID = 9001
 
@@ -44,16 +44,25 @@ object AlertNotifier {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
+        val alarmSoundUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+            ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+        val alarmAttrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+
         val alertChannel = NotificationChannel(
             CHANNEL_ALERTS,
             "Price & Technical Alerts",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Loud beep alerts for price levels, breakouts, and trendlines"
+            description = "Loud alarm alerts for price levels, breakouts, and TBT SMC triggers"
             enableVibration(true)
+            enableLights(true)
             vibrationPattern = this@AlertNotifier.vibrationPattern
-            setSound(null, null)
+            setSound(alarmSoundUri, alarmAttrs)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            setBypassDnd(true)
         }
 
         val serviceChannel = NotificationChannel(
@@ -61,7 +70,7 @@ object AlertNotifier {
             "Background Market Monitor",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Keeps live Binance Futures alert monitoring active"
+            description = "Keeps live Binance Futures alert monitoring active when app is closed"
             setSound(null, null)
             enableVibration(false)
         }
@@ -81,10 +90,11 @@ object AlertNotifier {
         return NotificationCompat.Builder(context, CHANNEL_SERVICE)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("Futures Alert Monitor Active")
-            .setContentText("Watching $activeAlertCount active alert${if (activeAlertCount == 1) "" else "s"} via Binance stream")
+            .setContentText("Watching $activeAlertCount active alert${if (activeAlertCount == 1) "" else "s"} in background")
             .setContentIntent(openAppIntent)
             .setOngoing(true)
             .setSilent(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
@@ -99,7 +109,7 @@ object AlertNotifier {
     ) {
         ensureChannels(context)
 
-        // Always play loud beep & vibration immediately even if POST_NOTIFICATIONS is not granted yet.
+        // Always play loud PCM beep & vibration immediately so foreground/service alerts punch through
         if (loudSoundEnabled) {
             playLoudBeepAlert(context, force = false)
         }
@@ -125,6 +135,9 @@ object AlertNotifier {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val alarmSoundUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+            ?: android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+
         val builder = NotificationCompat.Builder(context, CHANNEL_ALERTS)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
@@ -132,9 +145,15 @@ object AlertNotifier {
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
-            .setSilent(true)
             .setContentIntent(tapIntent)
+
+        if (loudSoundEnabled) {
+            builder.setSound(alarmSoundUri)
+        } else {
+            builder.setSilent(true)
+        }
 
         if (vibrationEnabled) {
             builder.setVibrate(vibrationPattern)

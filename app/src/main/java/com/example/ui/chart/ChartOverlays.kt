@@ -83,8 +83,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.remote.SocketConnectionState
+import com.example.domain.indicator.TbtCascadeAction
 import com.example.domain.indicator.TbtConditionSummary
 import com.example.domain.indicator.TbtMarketBias
+import com.example.domain.indicator.TbtMtfCascadeState
+import com.example.domain.indicator.TbtMtfProfile
 import com.example.domain.indicator.TbtSmcConfig
 import com.example.domain.model.ChartDrawing
 import com.example.domain.model.DrawingTool
@@ -731,92 +734,235 @@ private fun TbtLayerMenuItem(
 fun TbtConditionHudBadge(
     summary: TbtConditionSummary,
     precision: Int,
+    mtfCascade: TbtMtfCascadeState? = null,
+    activeProfile: TbtMtfProfile = TbtMtfProfile.INTRADAY_1H,
+    activeTimeframeId: String = "15m",
+    onSelectMtfProfile: (TbtMtfProfile) -> Unit = {},
+    onSelectTimeframe: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    var expanded by remember { mutableStateOf(true) }
     val biasColor = when (summary.bias) {
         TbtMarketBias.BULLISH -> BullishGreen
         TbtMarketBias.BEARISH -> BearishRed
         TbtMarketBias.SIDEWAYS -> AmberGold
     }
 
+    val cascadeColor = when (mtfCascade?.action) {
+        TbtCascadeAction.BUY_READY -> BullishGreen
+        TbtCascadeAction.WAIT_BUY_CONFIRM -> CyanInfo
+        TbtCascadeAction.SELL_READY -> BearishRed
+        TbtCascadeAction.WAIT_SELL_CONFIRM -> AmberGold
+        TbtCascadeAction.MIXED_WAIT, null -> TextMuted
+    }
+
     Column(
         modifier = modifier
-            .widthIn(min = 128.dp, max = 188.dp)
+            .widthIn(min = 148.dp, max = 216.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(ElevatedSurface.copy(alpha = 0.88f))
+            .background(ElevatedSurface.copy(alpha = 0.90f))
             .border(0.75.dp, BorderSubtle, RoundedCornerShape(8.dp))
-            .padding(horizontal = 8.dp, vertical = 5.dp)
+            .padding(horizontal = 7.dp, vertical = 5.dp)
+            .animateContentSize()
             .testTag("tbt_condition_hud"),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
+        // Header Row: TBT HUB + 1H / 4H Setup Profile Switcher + Collapse Toggle
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "TBT SMC",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextMuted,
-                fontWeight = FontWeight.Bold,
-                fontSize = 8.5.sp
-            )
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(biasColor.copy(alpha = 0.16f))
-                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = summary.bias.label,
-                    style = TabularMonoStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
-                    color = biasColor
+                    text = "TBT HUB",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextPrimary,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 8.5.sp
+                )
+                TbtMtfProfile.entries.forEach { profile ->
+                    val selected = profile == activeProfile
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (selected) AmberGold.copy(alpha = 0.22f) else ToolbarSurface)
+                            .border(
+                                0.5.dp,
+                                if (selected) AmberGold else BorderSubtle,
+                                RoundedCornerShape(4.dp)
+                            )
+                            .clickable { onSelectMtfProfile(profile) }
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                            .testTag("tbt_mtf_profile_${profile.shortLabel.lowercase()}")
+                    ) {
+                        Text(
+                            text = profile.shortLabel,
+                            style = TabularMonoStyle.copy(
+                                fontSize = 8.sp,
+                                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium
+                            ),
+                            color = if (selected) AmberGold else TextMuted
+                        )
+                    }
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(biasColor.copy(alpha = 0.16f))
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                ) {
+                    Text(
+                        text = summary.bias.shortLabel,
+                        style = TabularMonoStyle.copy(fontSize = 7.5.sp, fontWeight = FontWeight.Bold),
+                        color = biasColor
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Collapse TBT Hub" else "Expand TBT Hub",
+                    tint = TextMuted,
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clickable { expanded = !expanded }
+                        .testTag("tbt_hub_collapse_btn")
                 )
             }
         }
 
-        if (summary.htfLabel != null && summary.htfBias != null) {
-            val htfColor = when (summary.htfBias) {
-                TbtMarketBias.BULLISH -> BullishGreen
-                TbtMarketBias.BEARISH -> BearishRed
-                TbtMarketBias.SIDEWAYS -> AmberGold
+        // Cascade Action Banner (e.g., BUY READY • 3m/5m OK | 1H-15m BULL • Wait 3m/5m)
+        if (mtfCascade != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(cascadeColor.copy(alpha = 0.16f))
+                    .border(0.5.dp, cascadeColor.copy(alpha = 0.55f), RoundedCornerShape(5.dp))
+                    .padding(horizontal = 5.dp, vertical = 2.5.dp)
+                    .testTag("tbt_mtf_cascade_banner"),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = mtfCascade.headline,
+                    style = TabularMonoStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.Bold),
+                    color = cascadeColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "${mtfCascade.alignedCount}/${mtfCascade.totalCount}",
+                    style = TabularMonoStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.ExtraBold),
+                    color = cascadeColor
+                )
             }
-            Text(
-                text = "HTF ${summary.htfLabel}: ${summary.htfBias.label}",
-                style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold),
-                color = htfColor,
-                maxLines = 1,
-                softWrap = false
-            )
         }
 
-        summary.activeBullPower?.let { bull ->
-            Text(
-                text = "Bull Pwr: ${ChartNumberFormatter.formatPrice(bull, precision)}",
-                style = TabularMonoStyle.copy(fontSize = 9.sp, fontWeight = FontWeight.Medium),
-                color = Color(0xFFFFD600),
-                maxLines = 1,
-                softWrap = false
-            )
+        if (expanded) {
+            // Interactive Multi-Timeframe Matrix (3-col or 4-col compact grid)
+            if (mtfCascade != null && mtfCascade.snapshots.isNotEmpty()) {
+                val cols = if (mtfCascade.snapshots.size <= 6) 3 else 4
+                val rows = mtfCascade.snapshots.chunked(cols)
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    rows.forEach { rowItems ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            rowItems.forEach { snap ->
+                                val snapColor = when {
+                                    !snap.isLoaded -> TextMuted
+                                    snap.bias == TbtMarketBias.BULLISH -> BullishGreen
+                                    snap.bias == TbtMarketBias.BEARISH -> BearishRed
+                                    else -> AmberGold
+                                }
+                                val isCurrentTf = snap.tfId.equals(activeTimeframeId, ignoreCase = true)
+                                val borderColor = when {
+                                    isCurrentTf -> AmberGold
+                                    snap.hasBuyConfirm -> BullishGreen.copy(alpha = 0.7f)
+                                    snap.hasSellConfirm -> BearishRed.copy(alpha = 0.7f)
+                                    else -> snapColor.copy(alpha = 0.28f)
+                                }
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(snapColor.copy(alpha = if (isCurrentTf) 0.20f else 0.10f))
+                                        .border(if (isCurrentTf) 1.dp else 0.5.dp, borderColor, RoundedCornerShape(4.dp))
+                                        .clickable { onSelectTimeframe(snap.tfId) }
+                                        .padding(horizontal = 3.dp, vertical = 2.dp)
+                                        .testTag("tbt_hub_tf_${snap.tfId.lowercase()}"),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = snap.label,
+                                        style = TabularMonoStyle.copy(
+                                            fontSize = 7.5.sp,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = if (isCurrentTf) TextPrimary else TextMuted,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                    Text(
+                                        text = snap.statusShort,
+                                        style = TabularMonoStyle.copy(
+                                            fontSize = 7.5.sp,
+                                            fontWeight = FontWeight.ExtraBold
+                                        ),
+                                        color = snapColor,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Compact Power Shift & Short Signal Footer
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val pwrText = when {
+                    summary.activeBullPower != null -> "BPWR ${ChartNumberFormatter.formatPrice(summary.activeBullPower, precision)}"
+                    summary.activeBearPower != null -> "SPWR ${ChartNumberFormatter.formatPrice(summary.activeBearPower, precision)}"
+                    else -> null
+                }
+                if (pwrText != null) {
+                    Text(
+                        text = pwrText,
+                        style = TabularMonoStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.SemiBold),
+                        color = Color(0xFFFFD600),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+                Text(
+                    text = summary.lastSignal,
+                    style = TabularMonoStyle.copy(fontSize = 8.sp, fontWeight = FontWeight.SemiBold),
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
-        summary.activeBearPower?.let { bear ->
-            Text(
-                text = "Bear Pwr: ${ChartNumberFormatter.formatPrice(bear, precision)}",
-                style = TabularMonoStyle.copy(fontSize = 9.sp, fontWeight = FontWeight.Medium),
-                color = Color(0xFFFFD600),
-                maxLines = 1,
-                softWrap = false
-            )
-        }
-        Text(
-            text = summary.lastSignal,
-            style = MaterialTheme.typography.bodySmall,
-            color = TextPrimary,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }
 

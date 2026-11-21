@@ -64,7 +64,9 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.indicator.TbtCascadeAction
 import com.example.domain.indicator.TbtMarketBias
+import com.example.domain.indicator.TbtMtfProfile
 import com.example.domain.indicator.TbtTradeDirection
 import com.example.domain.indicator.TbtTradeSetup
 import com.example.ui.theme.AmberGold
@@ -100,6 +102,7 @@ fun TbtIndicatorControl(
     onReplayStepForward: () -> Unit,
     onReplaySetSpeed: (Int) -> Unit,
     onReplayReset: () -> Unit,
+    onSelectMtfProfile: (TbtMtfProfile) -> Unit = {},
     onCreateEntryAlert: (TbtTradeSetup, Boolean) -> Unit = { _, _ -> },
     onCreateSlTpAlerts: (TbtTradeSetup) -> Unit = {},
     modifier: Modifier = Modifier
@@ -411,7 +414,58 @@ fun TbtIndicatorControl(
                     }
                 }
 
-                // 2. Display & Auto-Hide Settings
+                // 2. MTF Cascade Trade Profile (1H Setup vs 4H Setup)
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(
+                        text = "MTF Cascade Setup",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberGold,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.5.sp
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        TbtMtfProfile.entries.forEach { profile ->
+                            val selected = prefs.tbtMtfProfile == profile
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (selected) BullishGreen.copy(alpha = 0.16f) else ElevatedSurface)
+                                    .border(
+                                        0.75.dp,
+                                        if (selected) BullishGreen else BorderSubtle,
+                                        RoundedCornerShape(6.dp)
+                                    )
+                                    .clickable { onSelectMtfProfile(profile) }
+                                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                                    .testTag("tbt_settings_profile_${profile.shortLabel.lowercase()}"),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = profile.title,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (selected) BullishGreen else TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.5.sp
+                                )
+                                Text(
+                                    text = if (profile == TbtMtfProfile.INTRADAY_1H) "1H→30m→15m→10m→3/5m" else "4H→2H→1H→30m→3/5m",
+                                    style = TabularMonoStyle.copy(fontSize = 8.sp),
+                                    color = TextMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = BorderSubtle, thickness = 0.75.dp)
+
+                // 3. Display & Auto-Hide Settings
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     TbtCheckboxRow(
                         label = "Auto-Hide on HTF (>15m)",
@@ -426,7 +480,7 @@ fun TbtIndicatorControl(
                         onClick = onToggleSignals
                     )
                     TbtCheckboxRow(
-                        label = "Volume Imbalance Line",
+                        label = "VI Entry Line",
                         checked = prefs.tbtShowVolImbalanceLine,
                         testTag = "tbt_toggle_vol_imbalance",
                         onClick = onToggleVolImbalanceLine
@@ -441,28 +495,28 @@ fun TbtIndicatorControl(
 
                 HorizontalDivider(color = BorderSubtle, thickness = 0.75.dp)
 
-                // Core TBT SMC Layers
+                // Core TBT SMC Layers (short-form labels)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     TbtCheckboxRow(
-                        label = "Demand / Supply Lines",
+                        label = "DEM / SUP Lines",
                         checked = prefs.tbtShowZones,
                         testTag = "tbt_layer_zones",
                         onClick = onToggleZones
                     )
                     TbtCheckboxRow(
-                        label = "Power Shift",
+                        label = "BPWR / SPWR Shift",
                         checked = prefs.tbtShowPowerShift,
                         testTag = "tbt_layer_power_shift",
                         onClick = onTogglePowerShift
                     )
                     TbtCheckboxRow(
-                        label = "Overlapping POI",
+                        label = "OVL POI",
                         checked = prefs.tbtShowOverlap,
                         testTag = "tbt_layer_overlap",
                         onClick = onToggleOverlap
                     )
                     TbtCheckboxRow(
-                        label = "Condition HUD",
+                        label = "TBT MTF Hub",
                         checked = prefs.tbtShowHud,
                         testTag = "tbt_layer_hud",
                         onClick = onToggleHud
@@ -548,33 +602,49 @@ private fun TbtBuySellSetupOverlay(
                 )
             }
 
+            val gradeColor = when (setup.grade) {
+                "A+" -> AmberGold
+                "C" -> BearishRed
+                else -> TextPrimary
+            }
             Text(
                 text = setup.grade,
                 style = TabularMonoStyle.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Bold),
-                color = if (setup.grade == "A+") AmberGold else TextPrimary
+                color = gradeColor
             )
 
+            val tfSuffix = setup.executionTf?.let { " ($it)" } ?: ""
             Text(
-                text = setup.triggerName,
+                text = "${setup.triggerName}$tfSuffix",
                 style = MaterialTheme.typography.labelSmall,
                 color = TextPrimary,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 10.sp
             )
 
-            if (setup.htfLabel != null && setup.htfBias != null) {
+            val cascadeBadge = setup.cascadeAction?.let { action ->
+                when (action) {
+                    TbtCascadeAction.BUY_READY -> "MTF OK" to BullishGreen
+                    TbtCascadeAction.SELL_READY -> "MTF OK" to BearishRed
+                    TbtCascadeAction.WAIT_BUY_CONFIRM,
+                    TbtCascadeAction.WAIT_SELL_CONFIRM -> "WAIT LTF" to CyanInfo
+                    TbtCascadeAction.MIXED_WAIT -> null
+                }
+            }
+            if (cascadeBadge != null) {
+                Text(
+                    text = cascadeBadge.first,
+                    style = TabularMonoStyle.copy(fontSize = 8.5.sp, fontWeight = FontWeight.ExtraBold),
+                    color = cascadeBadge.second
+                )
+            } else if (setup.htfLabel != null && setup.htfBias != null) {
                 val htfColor = when (setup.htfBias) {
                     TbtMarketBias.BULLISH -> BullishGreen
                     TbtMarketBias.BEARISH -> BearishRed
                     TbtMarketBias.SIDEWAYS -> AmberGold
                 }
-                val htfShort = when (setup.htfBias) {
-                    TbtMarketBias.BULLISH -> "BULL"
-                    TbtMarketBias.BEARISH -> "BEAR"
-                    TbtMarketBias.SIDEWAYS -> "RANGE"
-                }
                 Text(
-                    text = "${setup.htfLabel}:$htfShort",
+                    text = "${setup.htfLabel}:${setup.htfBias.shortLabel}",
                     style = TabularMonoStyle.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
                     color = htfColor
                 )

@@ -105,12 +105,13 @@ data class ChartPreferences(
     val tbtShowOverlap: Boolean = true,
     val tbtShowSignals: Boolean = true,
     val tbtShowHud: Boolean = true,
-    val tbtAutoHideOnHtf: Boolean = true,
+    val tbtAutoHideOnHtf: Boolean = false,
     val tbtTargetRR: Double = 3.0,
     val tbtSlBufferPct: Double = 0.05,
-    val tbtUseKillzone: Boolean = true,
+    val tbtUseKillzone: Boolean = false,
     val tbtShowVolImbalanceLine: Boolean = true,
-    val tbtShowZoneTags: Boolean = true
+    val tbtShowZoneTags: Boolean = true,
+    val tbtMtfProfile: com.example.domain.indicator.TbtMtfProfile = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H
 ) {
     fun toTbtSmcConfig(): TbtSmcConfig = TbtSmcConfig(
         swingLen = 5,
@@ -123,7 +124,8 @@ data class ChartPreferences(
         targetRR = tbtTargetRR,
         slBufferPct = tbtSlBufferPct,
         showVolImbalanceLine = tbtShowVolImbalanceLine,
-        showZoneTags = tbtShowZoneTags
+        showZoneTags = tbtShowZoneTags,
+        mtfProfile = tbtMtfProfile
     )
 }
 

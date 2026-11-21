@@ -51,16 +51,63 @@ data class TbtMarker(
     val text: String
 )
 
-enum class TbtMarketBias(val label: String) {
-    BULLISH("BULLISH"),
-    BEARISH("BEARISH"),
-    SIDEWAYS("SIDEWAYS")
+enum class TbtMarketBias(val label: String, val shortLabel: String) {
+    BULLISH("BULLISH", "BULL"),
+    BEARISH("BEARISH", "BEAR"),
+    SIDEWAYS("SIDEWAYS", "RNG")
 }
 
 enum class TbtTradeDirection(val label: String) {
     BUY("BUY"),
     SELL("SELL")
 }
+
+enum class TbtMtfProfile(
+    val shortLabel: String,
+    val title: String,
+    val timeframeIds: List<String>
+) {
+    INTRADAY_1H(
+        shortLabel = "1H",
+        title = "1H Setup",
+        timeframeIds = listOf("1H", "30m", "15m", "10m", "5m", "3m")
+    ),
+    SWING_4H(
+        shortLabel = "4H",
+        title = "4H Setup",
+        timeframeIds = listOf("4H", "2H", "1H", "30m", "15m", "10m", "5m", "3m")
+    )
+}
+
+enum class TbtCascadeAction(val badgeText: String) {
+    BUY_READY("BUY READY"),
+    WAIT_BUY_CONFIRM("WAIT 3m/5m BUY"),
+    SELL_READY("SELL READY"),
+    WAIT_SELL_CONFIRM("WAIT 3m/5m SELL"),
+    MIXED_WAIT("MIXED")
+}
+
+data class TbtTimeframeSnapshot(
+    val tfId: String,
+    val label: String,
+    val bias: TbtMarketBias,
+    val statusShort: String,
+    val hasBuyConfirm: Boolean = false,
+    val hasSellConfirm: Boolean = false,
+    val nearDemandPoi: Boolean = false,
+    val nearSupplyPoi: Boolean = false,
+    val isLoaded: Boolean = true
+)
+
+data class TbtMtfCascadeState(
+    val profile: TbtMtfProfile,
+    val snapshots: List<TbtTimeframeSnapshot>,
+    val action: TbtCascadeAction,
+    val headline: String,
+    val alignedCount: Int,
+    val totalCount: Int,
+    val htfBias: TbtMarketBias
+)
 
 data class TbtChecklistItem(
     val label: String,
@@ -71,7 +118,7 @@ data class TbtTradeSetup(
     val direction: TbtTradeDirection,
     val triggerName: String,
     val reason: String,
-    val grade: String, // "A+", "A", "B"
+    val grade: String, // "A+", "A", "B", "C"
     val score: Int, // 0..5
     val entryPrice: Double,
     val retracementEntryPrice: Double? = null,
@@ -81,6 +128,8 @@ data class TbtTradeSetup(
     val riskPercent: Double,
     val htfLabel: String? = null,
     val htfBias: TbtMarketBias? = null,
+    val cascadeAction: TbtCascadeAction? = null,
+    val executionTf: String? = null,
     val volumeConfirmed: Boolean = false,
     val checklist: List<TbtChecklistItem> = emptyList(),
     val signalTimeMillis: Long = 0L
@@ -92,7 +141,7 @@ data class TbtConditionSummary(
     val htfBias: TbtMarketBias? = null,
     val activeBullPower: Double? = null,
     val activeBearPower: Double? = null,
-    val lastSignal: String = "Waiting for data..."
+    val lastSignal: String = "Wait"
 )
 
 data class TbtBacktestReport(
@@ -110,11 +159,12 @@ data class TbtSmcConfig(
     val showOverlap: Boolean = true,
     val showSignals: Boolean = true,
     val showHud: Boolean = true,
-    val autoHideOnHtf: Boolean = true,
+    val autoHideOnHtf: Boolean = false,
     val targetRR: Double = 3.0,
     val slBufferPct: Double = 0.05,
     val showVolImbalanceLine: Boolean = true,
-    val showZoneTags: Boolean = true
+    val showZoneTags: Boolean = true,
+    val mtfProfile: TbtMtfProfile = TbtMtfProfile.INTRADAY_1H
 )
 
 data class TbtSmcOutput(
@@ -123,7 +173,8 @@ data class TbtSmcOutput(
     val zones: List<TbtZone> = emptyList(),
     val summary: TbtConditionSummary = TbtConditionSummary(),
     val backtestReport: TbtBacktestReport = TbtBacktestReport(),
-    val activeSetup: TbtTradeSetup? = null
+    val activeSetup: TbtTradeSetup? = null,
+    val mtfCascade: TbtMtfCascadeState? = null
 ) {
     companion object {
         val EMPTY = TbtSmcOutput()
@@ -176,6 +227,28 @@ private data class HtfAnalysis(
     val supplyBottoms: List<Double>
 )
 
+private data class CoreScanResult(
+    val markers: List<TbtMarker>,
+    val priceLines: List<TbtPriceLine>,
+    val recentZones: List<TbtZone>,
+    val bias: TbtMarketBias,
+    val activeBullPower: Double?,
+    val activeBearPower: Double?,
+    val lastSignal: String,
+    val openTrade: SimulatedTrade?,
+    val viCandidatePrice: Double?,
+    val wins: Int,
+    val losses: Int,
+    val recentBullConfirm: Boolean,
+    val recentBearConfirm: Boolean,
+    val nearDemandPoi: Boolean,
+    val nearSupplyPoi: Boolean,
+    val hasOverlapBuy: Boolean,
+    val hasOverlapSell: Boolean,
+    val lastDemandTapped: Boolean,
+    val lastSupplyTapped: Boolean
+)
+
 object TbtSmcEngine {
 
     /**
@@ -186,13 +259,164 @@ object TbtSmcEngine {
         return computeHtfAnalysis(htfCandles)?.bias
     }
 
+    /**
+     * Computes a compact per-timeframe TBT SMC snapshot for the Multi-Timeframe Hub.
+     */
+    fun analyzeTimeframeSnapshot(
+        tfId: String,
+        candles: List<Candle>,
+        config: TbtSmcConfig = TbtSmcConfig()
+    ): TbtTimeframeSnapshot {
+        if (candles.size < 25) {
+            return TbtTimeframeSnapshot(
+                tfId = tfId,
+                label = tfId,
+                bias = TbtMarketBias.SIDEWAYS,
+                statusShort = "...",
+                isLoaded = false
+            )
+        }
+        val scan = runCoreScan(candles, config, htfAnalysis = null, buildVisuals = false)
+        val statusShort = when {
+            scan.recentBullConfirm -> "3CR+"
+            scan.recentBearConfirm -> "3CR-"
+            scan.lastDemandTapped -> "DEM*"
+            scan.lastSupplyTapped -> "SUP*"
+            scan.hasOverlapBuy && scan.bias == TbtMarketBias.BULLISH -> "OVL+"
+            scan.hasOverlapSell && scan.bias == TbtMarketBias.BEARISH -> "OVL-"
+            scan.activeBullPower != null -> "BPWR"
+            scan.activeBearPower != null -> "SPWR"
+            scan.nearDemandPoi -> "DEM"
+            scan.nearSupplyPoi -> "SUP"
+            else -> scan.bias.shortLabel
+        }
+        return TbtTimeframeSnapshot(
+            tfId = tfId,
+            label = tfId,
+            bias = scan.bias,
+            statusShort = statusShort,
+            hasBuyConfirm = scan.recentBullConfirm,
+            hasSellConfirm = scan.recentBearConfirm,
+            nearDemandPoi = scan.nearDemandPoi,
+            nearSupplyPoi = scan.nearSupplyPoi,
+            isLoaded = true
+        )
+    }
+
+    /**
+     * Evaluates the full TBT SMC Multi-Timeframe Cascade:
+     * - 1H Setup: 1H -> 30m -> 15m -> 10m -> wait 5m / 3m confirmation
+     * - 4H Setup: 4H -> 2H -> 1H -> 30m -> 15m -> 10m -> wait 5m / 3m confirmation
+     */
+    fun evaluateMtfCascade(
+        profile: TbtMtfProfile,
+        candlesByTf: Map<String, List<Candle>>,
+        config: TbtSmcConfig = TbtSmcConfig()
+    ): TbtMtfCascadeState {
+        val snapshots = profile.timeframeIds.map { tfId ->
+            val tfCandles = candlesByTf.entries
+                .firstOrNull { it.key.equals(tfId, ignoreCase = true) }
+                ?.value
+                .orEmpty()
+            analyzeTimeframeSnapshot(tfId, tfCandles, config)
+        }
+
+        val byId = snapshots.associateBy { it.tfId.uppercase(Locale.US) }
+        fun biasOf(id: String): TbtMarketBias = byId[id.uppercase(Locale.US)]?.bias ?: TbtMarketBias.SIDEWAYS
+        fun loadedOf(id: String): Boolean = byId[id.uppercase(Locale.US)]?.isLoaded == true
+
+        val snap3m = byId["3M"]
+        val snap5m = byId["5M"]
+        val ltfBuyConfirmed = (snap3m?.hasBuyConfirm == true) || (snap5m?.hasBuyConfirm == true)
+        val ltfSellConfirmed = (snap3m?.hasSellConfirm == true) || (snap5m?.hasSellConfirm == true)
+
+        val anchorBias: TbtMarketBias
+        val htfBullAligned: Boolean
+        val htfBearAligned: Boolean
+
+        when (profile) {
+            TbtMtfProfile.INTRADAY_1H -> {
+                val b1h = biasOf("1H")
+                val b30m = biasOf("30m")
+                val b15m = biasOf("15m")
+                anchorBias = b1h
+                htfBullAligned = loadedOf("1H") &&
+                    b1h == TbtMarketBias.BULLISH &&
+                    b30m == TbtMarketBias.BULLISH &&
+                    b15m == TbtMarketBias.BULLISH
+                htfBearAligned = loadedOf("1H") &&
+                    b1h == TbtMarketBias.BEARISH &&
+                    b30m == TbtMarketBias.BEARISH &&
+                    b15m == TbtMarketBias.BEARISH
+            }
+            TbtMtfProfile.SWING_4H -> {
+                val b4h = biasOf("4H")
+                val b2h = biasOf("2H")
+                val b1h = biasOf("1H")
+                val b30m = biasOf("30m")
+                val b15m = biasOf("15m")
+                anchorBias = b4h
+                htfBullAligned = loadedOf("4H") &&
+                    b4h == TbtMarketBias.BULLISH &&
+                    b2h != TbtMarketBias.BEARISH &&
+                    b1h == TbtMarketBias.BULLISH &&
+                    b30m == TbtMarketBias.BULLISH &&
+                    b15m == TbtMarketBias.BULLISH
+                htfBearAligned = loadedOf("4H") &&
+                    b4h == TbtMarketBias.BEARISH &&
+                    b2h != TbtMarketBias.BULLISH &&
+                    b1h == TbtMarketBias.BEARISH &&
+                    b30m == TbtMarketBias.BEARISH &&
+                    b15m == TbtMarketBias.BEARISH
+            }
+        }
+
+        val (action, headline) = when {
+            htfBullAligned && ltfBuyConfirmed ->
+                TbtCascadeAction.BUY_READY to "BUY READY • 3m/5m OK"
+            htfBullAligned ->
+                TbtCascadeAction.WAIT_BUY_CONFIRM to "${profile.shortLabel}-15m BULL • Wait 3m/5m"
+            htfBearAligned && ltfSellConfirmed ->
+                TbtCascadeAction.SELL_READY to "SELL READY • 3m/5m OK"
+            htfBearAligned ->
+                TbtCascadeAction.WAIT_SELL_CONFIRM to "${profile.shortLabel}-15m BEAR • Wait 3m/5m"
+            anchorBias == TbtMarketBias.BULLISH ->
+                TbtCascadeAction.MIXED_WAIT to "${profile.shortLabel} BULL • Wait 30m/15m"
+            anchorBias == TbtMarketBias.BEARISH ->
+                TbtCascadeAction.MIXED_WAIT to "${profile.shortLabel} BEAR • Wait 30m/15m"
+            else ->
+                TbtCascadeAction.MIXED_WAIT to "${profile.shortLabel} RNG • Wait Bias"
+        }
+
+        val loadedSnapshots = snapshots.filter { it.isLoaded }
+        val targetBias = when (action) {
+            TbtCascadeAction.BUY_READY, TbtCascadeAction.WAIT_BUY_CONFIRM -> TbtMarketBias.BULLISH
+            TbtCascadeAction.SELL_READY, TbtCascadeAction.WAIT_SELL_CONFIRM -> TbtMarketBias.BEARISH
+            TbtCascadeAction.MIXED_WAIT -> anchorBias
+        }
+        val alignedCount = if (targetBias == TbtMarketBias.SIDEWAYS) {
+            0
+        } else {
+            loadedSnapshots.count { it.bias == targetBias }
+        }
+
+        return TbtMtfCascadeState(
+            profile = profile,
+            snapshots = snapshots,
+            action = action,
+            headline = headline,
+            alignedCount = alignedCount,
+            totalCount = snapshots.size,
+            htfBias = anchorBias
+        )
+    }
+
     private fun computeHtfAnalysis(htfCandles: List<Candle>): HtfAnalysis? {
         if (htfCandles.size < 20) return null
         val closes = htfCandles.map { it.close }
         val lastClose = closes.last()
         val sma20 = closes.takeLast(20).average()
 
-        // Simple causal swing high/low check on HTF
         val recentSlice = htfCandles.takeLast(min(40, htfCandles.size))
         val half = recentSlice.size / 2
         val firstHalfHigh = recentSlice.take(half).maxOf { it.high }
@@ -204,12 +428,11 @@ object TbtSmcEngine {
         val bearStructure = secondHalfLow < firstHalfLow && secondHalfHigh <= firstHalfHigh * 1.001
 
         val bias = when {
-            lastClose > sma20 * 1.0015 || (lastClose > sma20 && bullStructure) -> TbtMarketBias.BULLISH
-            lastClose < sma20 * 0.9985 || (lastClose < sma20 && bearStructure) -> TbtMarketBias.BEARISH
+            lastClose > sma20 * 1.0012 || (lastClose > sma20 && bullStructure) -> TbtMarketBias.BULLISH
+            lastClose < sma20 * 0.9988 || (lastClose < sma20 && bearStructure) -> TbtMarketBias.BEARISH
             else -> TbtMarketBias.SIDEWAYS
         }
 
-        // Track recent unmitigated HTF RBR/DBR Demand and DBD/RBD Supply boundaries
         val dTops = mutableListOf<Double>()
         val dBots = mutableListOf<Double>()
         val sTops = mutableListOf<Double>()
@@ -256,10 +479,27 @@ object TbtSmcEngine {
         candles: List<Candle>,
         config: TbtSmcConfig = TbtSmcConfig(),
         htfCandles: List<Candle> = emptyList(),
-        htfLabel: String? = null
+        htfLabel: String? = null,
+        mtfCandlesByTf: Map<String, List<Candle>> = emptyMap(),
+        activeTimeframeId: String? = null
     ): TbtSmcOutput {
-        val htfAnalysis = computeHtfAnalysis(htfCandles)
-        val htfBias = htfAnalysis?.bias
+        val mtfCascade = if (mtfCandlesByTf.isNotEmpty()) {
+            evaluateMtfCascade(config.mtfProfile, mtfCandlesByTf, config)
+        } else {
+            null
+        }
+
+        val resolvedHtfLabel = htfLabel ?: config.mtfProfile.shortLabel
+        val resolvedHtfCandles = if (htfCandles.size >= 20) {
+            htfCandles
+        } else {
+            mtfCandlesByTf.entries
+                .firstOrNull { it.key.equals(config.mtfProfile.shortLabel, ignoreCase = true) }
+                ?.value
+                .orEmpty()
+        }
+        val htfAnalysis = computeHtfAnalysis(resolvedHtfCandles)
+        val htfBias = mtfCascade?.htfBias?.takeIf { it != TbtMarketBias.SIDEWAYS } ?: htfAnalysis?.bias
 
         if (candles.size < 25) {
             return TbtSmcOutput(
@@ -268,17 +508,205 @@ object TbtSmcEngine {
                 zones = emptyList(),
                 summary = TbtConditionSummary(
                     bias = TbtMarketBias.SIDEWAYS,
-                    htfLabel = htfLabel,
+                    htfLabel = resolvedHtfLabel.takeIf { htfBias != null },
                     htfBias = htfBias,
                     activeBullPower = null,
                     activeBearPower = null,
-                    lastSignal = "Waiting for data..."
+                    lastSignal = "Wait..."
                 ),
                 backtestReport = TbtBacktestReport(),
-                activeSetup = null
+                activeSetup = null,
+                mtfCascade = mtfCascade
             )
         }
 
+        val scan = runCoreScan(candles, config, htfAnalysis = htfAnalysis, buildVisuals = true)
+        val priceLines = scan.priceLines.toMutableList()
+        val safeRR = config.targetRR.coerceIn(1.0, 20.0)
+
+        // If user is on a higher TF (>=15m) with no local open trade yet, surface the 3m/5m ready setup!
+        var chosenTrade = scan.openTrade
+        var chosenViPrice = scan.viCandidatePrice
+        var executionTfLabel = activeTimeframeId
+        if (chosenTrade == null &&
+            mtfCascade != null &&
+            (mtfCascade.action == TbtCascadeAction.BUY_READY || mtfCascade.action == TbtCascadeAction.SELL_READY)
+        ) {
+            val ltfCandidates = listOf("3m", "5m")
+            for (ltfId in ltfCandidates) {
+                val ltfCandles = mtfCandlesByTf.entries
+                    .firstOrNull { it.key.equals(ltfId, ignoreCase = true) }
+                    ?.value
+                    .orEmpty()
+                if (ltfCandles.size >= 25) {
+                    val ltfScan = runCoreScan(ltfCandles, config, htfAnalysis = htfAnalysis, buildVisuals = false)
+                    val ltfTrade = ltfScan.openTrade
+                    val matchesDirection = ltfTrade != null && (
+                        (mtfCascade.action == TbtCascadeAction.BUY_READY && ltfTrade.isLong) ||
+                            (mtfCascade.action == TbtCascadeAction.SELL_READY && !ltfTrade.isLong)
+                        )
+                    if (matchesDirection && ltfTrade != null) {
+                        chosenTrade = ltfTrade
+                        chosenViPrice = ltfScan.viCandidatePrice
+                        executionTfLabel = ltfId
+                        break
+                    }
+                }
+            }
+        }
+
+        // Build actionable TBT SMC BUY / SELL Trade Setup with MTF Cascade confluence grading
+        val activeSetup = chosenTrade?.let { active ->
+            val direction = if (active.isLong) TbtTradeDirection.BUY else TbtTradeDirection.SELL
+            val effectiveHtfBias = htfBias ?: scan.bias
+            val htfAligned = (active.isLong && effectiveHtfBias == TbtMarketBias.BULLISH) ||
+                (!active.isLong && effectiveHtfBias == TbtMarketBias.BEARISH)
+            val cascadeAligned = when (mtfCascade?.action) {
+                TbtCascadeAction.BUY_READY, TbtCascadeAction.WAIT_BUY_CONFIRM -> active.isLong
+                TbtCascadeAction.SELL_READY, TbtCascadeAction.WAIT_SELL_CONFIRM -> !active.isLong
+                else -> htfAligned
+            }
+            val cascadeCounter = when (mtfCascade?.action) {
+                TbtCascadeAction.BUY_READY, TbtCascadeAction.WAIT_BUY_CONFIRM -> !active.isLong
+                TbtCascadeAction.SELL_READY, TbtCascadeAction.WAIT_SELL_CONFIRM -> active.isLong
+                else -> false
+            }
+
+            val riskPct = if (active.entryPrice > 0.0) {
+                (abs(active.entryPrice - active.stopLoss) / active.entryPrice) * 100.0
+            } else 0.0
+
+            val validRetraceVi = chosenViPrice?.takeIf { vi ->
+                if (active.isLong) {
+                    vi > active.stopLoss && vi < active.entryPrice
+                } else {
+                    vi < active.stopLoss && vi > active.entryPrice
+                }
+            }
+
+            val cascadeCheckLabel = when {
+                mtfCascade != null ->
+                    "${mtfCascade.profile.shortLabel} MTF (${mtfCascade.alignedCount}/${mtfCascade.totalCount}) ${mtfCascade.action.badgeText}"
+                htfBias != null ->
+                    "$resolvedHtfLabel Bias (${htfBias.shortLabel})"
+                else ->
+                    "Bias (${scan.bias.shortLabel})"
+            }
+
+            val checklist = listOf(
+                TbtChecklistItem(cascadeCheckLabel, cascadeAligned),
+                TbtChecklistItem("DEM/SUP or OVL POI", active.poiAligned),
+                TbtChecklistItem("BPWR / SPWR Shift", active.powerAligned),
+                TbtChecklistItem("Trigger: ${active.triggerName}", true),
+                TbtChecklistItem("Volume Conf", active.volumeConfirmed)
+            )
+            val score = checklist.count { it.met }
+            val grade = when {
+                cascadeCounter -> "C"
+                score >= 4 && cascadeAligned -> "A+"
+                score >= 3 -> "A"
+                else -> "B"
+            }
+
+            if (config.showSignals) {
+                val rrLabel = if (safeRR % 1.0 == 0.0) {
+                    "${safeRR.toInt()}R"
+                } else {
+                    "${String.format(Locale.US, "%.1f", safeRR)}R"
+                }
+                priceLines.add(
+                    TbtPriceLine(
+                        price = active.entryPrice,
+                        title = if (active.isLong) "BUY" else "SELL",
+                        colorHex = if (active.isLong) "#00e676" else "#ff5252",
+                        lineStyle = 0,
+                        lineWidth = 1,
+                        category = TbtPriceLineCategory.TRADE_ENTRY
+                    )
+                )
+                priceLines.add(
+                    TbtPriceLine(
+                        price = active.stopLoss,
+                        title = "SL",
+                        colorHex = "#ff1744",
+                        lineStyle = 1,
+                        lineWidth = 1,
+                        category = TbtPriceLineCategory.TRADE_SL
+                    )
+                )
+                priceLines.add(
+                    TbtPriceLine(
+                        price = active.takeProfit,
+                        title = "TP $rrLabel",
+                        colorHex = "#00c853",
+                        lineStyle = 1,
+                        lineWidth = 1,
+                        category = TbtPriceLineCategory.TRADE_TP
+                    )
+                )
+            }
+
+            TbtTradeSetup(
+                direction = direction,
+                triggerName = active.triggerName,
+                reason = active.reason,
+                grade = grade,
+                score = score,
+                entryPrice = active.entryPrice,
+                retracementEntryPrice = validRetraceVi,
+                stopLoss = active.stopLoss,
+                takeProfit = active.takeProfit,
+                riskReward = safeRR,
+                riskPercent = riskPct,
+                htfLabel = resolvedHtfLabel.takeIf { htfBias != null },
+                htfBias = htfBias,
+                cascadeAction = mtfCascade?.action,
+                executionTf = executionTfLabel,
+                volumeConfirmed = active.volumeConfirmed,
+                checklist = checklist,
+                signalTimeMillis = active.signalTimeMillis
+            )
+        }
+
+        val totalTrades = scan.wins + scan.losses
+        val winRate = if (totalTrades > 0) ((scan.wins * 100.0) / totalTrades.toDouble()).roundToInt() else null
+        val netR = if (totalTrades > 0) {
+            val rawNet = scan.wins * safeRR - scan.losses * 1.0
+            (rawNet * 10.0).roundToInt() / 10.0
+        } else {
+            null
+        }
+
+        return TbtSmcOutput(
+            markers = scan.markers,
+            priceLines = priceLines,
+            zones = scan.recentZones,
+            summary = TbtConditionSummary(
+                bias = scan.bias,
+                htfLabel = resolvedHtfLabel.takeIf { htfBias != null },
+                htfBias = htfBias,
+                activeBullPower = scan.activeBullPower,
+                activeBearPower = scan.activeBearPower,
+                lastSignal = scan.lastSignal
+            ),
+            backtestReport = TbtBacktestReport(
+                totalTrades = totalTrades,
+                wins = scan.wins,
+                losses = scan.losses,
+                winRate = winRate,
+                netR = netR
+            ),
+            activeSetup = activeSetup,
+            mtfCascade = mtfCascade
+        )
+    }
+
+    private fun runCoreScan(
+        candles: List<Candle>,
+        config: TbtSmcConfig,
+        htfAnalysis: HtfAnalysis?,
+        buildVisuals: Boolean
+    ): CoreScanResult {
         val markersMap = LinkedHashMap<Long, Pair<Int, TbtMarker>>()
         val activeZones = mutableListOf<MutableTbtZone>()
         val overlapLevels = mutableListOf<OverlapLevel>()
@@ -287,19 +715,20 @@ object TbtSmcEngine {
         var activeBearPower: Double? = null
         var lastSwingHigh: Double? = null
         var lastSwingLow: Double? = null
-        var lastSignal = "None"
+        var lastSignal = "Wait"
         var lastDemandTapIndex = -100
         var lastSupplyTapIndex = -100
         var lastSellerPowerBrokenIndex = -100
         var lastBuyerPowerBrokenIndex = -100
+        var lastBullConfirmIndex = -100
+        var lastBearConfirmIndex = -100
+        var last3crSignalIndex = -100
 
-        // Single Volume Imbalance entry level tracker
         var latestViPrice: Double? = null
         var latestViIsBull = true
         var latestFvgMidPrice: Double? = null
         var latestFvgIsBull = true
 
-        // Causal historical backtest & active trade setup tracker (zero lookahead — safe for Bar Replay)
         val safeRR = config.targetRR.coerceIn(1.0, 20.0)
         val safeBufferFraction = config.slBufferPct.coerceIn(0.0, 5.0) / 100.0
         var openTrade: SimulatedTrade? = null
@@ -332,6 +761,7 @@ object TbtSmcEngine {
         }
 
         fun addMarker(marker: TbtMarker, priority: Int = 1) {
+            if (!buildVisuals) return
             val key = marker.timeMillis
             val existing = markersMap[key]
             if (existing == null || existing.first <= priority) {
@@ -399,7 +829,7 @@ object TbtSmcEngine {
             val avgVol = getSma(volumes, i, 20)
             val volumeConfirmed = avgVol <= 0.0 || c.volume >= avgVol * 1.15
 
-            // 0. Evaluate active simulated trade conservatively (SL checked before TP on same bar)
+            // 0. Evaluate active simulated trade conservatively (SL before TP)
             openTrade?.let { trade ->
                 if (trade.isLong) {
                     if (c.low <= trade.stopLoss) {
@@ -436,7 +866,7 @@ object TbtSmcEngine {
                 if (isPivotLow) lastSwingLow = pLow
             }
 
-            // 2. Overlapping Level (S/R Flip Hurdle)
+            // 2. Overlapping Level (OVL S/R Flip Hurdle)
             if (config.showOverlap) {
                 val sh = lastSwingHigh
                 if (sh != null && c1.close <= sh && c.close > sh) {
@@ -450,7 +880,7 @@ object TbtSmcEngine {
                 }
             }
 
-            // 3. Demand & Supply Zone Creation (RBR, DBR, DBD, RBD)
+            // 3. Demand & Supply Zone Creation (RBR/DBR DEM, DBD/RBD SUP)
             val isBaseCandle = bodySizes[i - 1] < avgBody1 * 0.9
             val isBullImpulse = isBull && bodySizes[i] > avgBody * 1.3 && c.close > c1.high
             val isBearImpulse = isBear && bodySizes[i] > avgBody * 1.3 && c.close < c1.low
@@ -462,7 +892,7 @@ object TbtSmcEngine {
                         MutableTbtZone(
                             id = "DEMAND_$i",
                             type = TbtZoneType.DEMAND,
-                            label = "$tagShort Demand",
+                            label = "$tagShort DEM",
                             startTimeMillis = c1.openTime,
                             top = max(c1.open, c1.close),
                             bottom = c1.low,
@@ -491,7 +921,7 @@ object TbtSmcEngine {
                         MutableTbtZone(
                             id = "SUPPLY_$i",
                             type = TbtZoneType.SUPPLY,
-                            label = "$tagShort Supply",
+                            label = "$tagShort SUP",
                             startTimeMillis = c1.openTime,
                             top = c1.high,
                             bottom = min(c1.open, c1.close),
@@ -513,7 +943,7 @@ object TbtSmcEngine {
                 }
             }
 
-            // 4. Manage Active Zones & Detect TBT Power Shifting
+            // 4. Manage Active Zones & Detect TBT Power Shifting (BPWR / SPWR)
             for (zIdx in activeZones.lastIndex downTo 0) {
                 val z = activeZones[zIdx]
                 if (z.type == TbtZoneType.DEMAND) {
@@ -521,7 +951,7 @@ object TbtSmcEngine {
                         activeZones.removeAt(zIdx)
                     } else if (!z.tapped && c.low <= z.top && c.close > z.bottom && c.openTime != z.startTimeMillis) {
                         z.tapped = true
-                        z.label = "${z.label} (Tapped)"
+                        z.label = "${z.label}*"
                         activeBullPower = c.low
                         lastDemandTapIndex = i
                     }
@@ -530,14 +960,13 @@ object TbtSmcEngine {
                         activeZones.removeAt(zIdx)
                     } else if (!z.tapped && c.high >= z.bottom && c.close < z.top && c.openTime != z.startTimeMillis) {
                         z.tapped = true
-                        z.label = "${z.label} (Tapped)"
+                        z.label = "${z.label}*"
                         activeBearPower = c.high
                         lastSupplyTapIndex = i
                     }
                 }
             }
 
-            // Check if Shifted Power Level is Broken
             var buyerPowerBrokenNow = false
             var sellerPowerBrokenNow = false
 
@@ -545,6 +974,7 @@ object TbtSmcEngine {
             if (bullPwr != null && c.close < bullPwr) {
                 buyerPowerBrokenNow = true
                 lastBuyerPowerBrokenIndex = i
+                lastBearConfirmIndex = i
                 if (config.showPowerShift) {
                     addMarker(
                         TbtMarker(
@@ -552,12 +982,12 @@ object TbtSmcEngine {
                             position = "aboveBar",
                             colorHex = "#ff1744",
                             shape = "arrowDown",
-                            text = "Buyer Power Broken!"
+                            text = "BPWR BRK"
                         ),
                         priority = 2
                     )
                 }
-                lastSignal = "Buyer Power Broken (SELL)"
+                lastSignal = "BPWR BRK (SELL)"
                 activeBullPower = null
             }
 
@@ -565,6 +995,7 @@ object TbtSmcEngine {
             if (bearPwr != null && c.close > bearPwr) {
                 sellerPowerBrokenNow = true
                 lastSellerPowerBrokenIndex = i
+                lastBullConfirmIndex = i
                 if (config.showPowerShift) {
                     addMarker(
                         TbtMarker(
@@ -572,12 +1003,12 @@ object TbtSmcEngine {
                             position = "belowBar",
                             colorHex = "#00c853",
                             shape = "arrowUp",
-                            text = "Seller Power Broken!"
+                            text = "SPWR BRK"
                         ),
                         priority = 2
                     )
                 }
-                lastSignal = "Seller Power Broken (BUY)"
+                lastSignal = "SPWR BRK (BUY)"
                 activeBearPower = null
             }
 
@@ -593,7 +1024,7 @@ object TbtSmcEngine {
                         MutableTbtZone(
                             id = "FVG_BULL_$i",
                             type = TbtZoneType.FVG_BULL,
-                            label = "Bull FVG",
+                            label = "FVG+",
                             startTimeMillis = c2.openTime,
                             top = c.low,
                             bottom = c2.high,
@@ -610,7 +1041,7 @@ object TbtSmcEngine {
                         MutableTbtZone(
                             id = "FVG_BEAR_$i",
                             type = TbtZoneType.FVG_BEAR,
-                            label = "Bear FVG",
+                            label = "FVG-",
                             startTimeMillis = c2.openTime,
                             top = c2.low,
                             bottom = c.high,
@@ -667,13 +1098,15 @@ object TbtSmcEngine {
                 }
             }
 
-            // 6. 2-Candle Liquidity Pool Grab (pure TBT SMC — no ICT session gating)
+            // 6. Refined 2-Candle Liquidity Pool Grab (LIQ) — filters micro-wick noise
             val slGrab = lastSwingLow
             val shGrab = lastSwingHigh
-            val bullLiqGrab = slGrab != null && c.low < slGrab && c.close > slGrab && isBull
-            val bearLiqGrab = shGrab != null && c.high > shGrab && c.close < shGrab && isBear
+            val validSweepRange = atr <= 0.0 || (c.high - c.low) >= atr * 0.45
+            val bullLiqGrab = slGrab != null && c.low < slGrab && c.close > slGrab && isBull && validSweepRange
+            val bearLiqGrab = shGrab != null && c.high > shGrab && c.close < shGrab && isBear && validSweepRange
 
             if (bullLiqGrab) {
+                lastBullConfirmIndex = i
                 if (config.showSignals) {
                     addMarker(
                         TbtMarker(
@@ -681,14 +1114,15 @@ object TbtSmcEngine {
                             position = "belowBar",
                             colorHex = "#00e676",
                             shape = "circle",
-                            text = "Liq Grab"
+                            text = "LIQ"
                         ),
                         priority = 2
                     )
                 }
-                lastSignal = "Bullish Liquidity Grab"
+                lastSignal = "LIQ BUY"
             }
             if (bearLiqGrab) {
+                lastBearConfirmIndex = i
                 if (config.showSignals) {
                     addMarker(
                         TbtMarker(
@@ -696,17 +1130,19 @@ object TbtSmcEngine {
                             position = "aboveBar",
                             colorHex = "#ff5252",
                             shape = "circle",
-                            text = "Liq Grab"
+                            text = "LIQ"
                         ),
                         priority = 2
                     )
                 }
-                lastSignal = "Bearish Liquidity Grab"
+                lastSignal = "LIQ SELL"
             }
 
-            // 7. TBT 3-Candle Reversal (3CR BUY / 3CR SELL)
-            val bull3cr = isBear2 && c1.low < c2.low && isBull && c.close > max(c1.high, c2.high)
-            val bear3cr = isBull2 && c1.high > c2.high && isBear && c.close < min(c1.low, c2.low)
+            // 7. Refined TBT 3-Candle Reversal (3CR BUY / 3CR SELL) with displacement filter
+            val strongBody = avgBody <= 0.0 || bodySizes[i] >= avgBody * 0.55
+            val notBackToBack = (i - last3crSignalIndex) >= 2
+            val bull3cr = isBear2 && c1.low < c2.low && isBull && c.close > max(c1.high, c2.high) && strongBody && notBackToBack
+            val bear3cr = isBull2 && c1.high > c2.high && isBear && c.close < min(c1.low, c2.low) && strongBody && notBackToBack
 
             val nearBuyPoi = isNearBuyPoi(i, min(c.low, c1.low), c.close, atr)
             val nearSellPoi = isNearSellPoi(i, max(c.high, c1.high), c.close, atr)
@@ -714,6 +1150,8 @@ object TbtSmcEngine {
             val bearPowerAligned = activeBearPower != null || (i - lastBuyerPowerBrokenIndex <= 8)
 
             if (bull3cr) {
+                last3crSignalIndex = i
+                lastBullConfirmIndex = i
                 if (config.showSignals) {
                     addMarker(
                         TbtMarker(
@@ -726,7 +1164,7 @@ object TbtSmcEngine {
                         priority = 3
                     )
                 }
-                lastSignal = "3CR BUY Confirmed"
+                lastSignal = "3CR BUY"
                 if (openTrade == null) {
                     val entry = c.close
                     val rawSl = min(c.low, min(c1.low, c2.low))
@@ -734,10 +1172,10 @@ object TbtSmcEngine {
                     val risk = entry - sl
                     if (risk > 0.0) {
                         val reason = when {
-                            nearBuyPoi && bullPowerAligned -> "Demand/Overlap Tap + Power Shift + 3CR BUY"
-                            nearBuyPoi -> "Demand/Overlap POI + 3CR BUY"
-                            bullPowerAligned -> "Seller Power Broken + 3CR BUY"
-                            else -> "TBT 3-Candle Reversal BUY"
+                            nearBuyPoi && bullPowerAligned -> "DEM/OVL + SPWR + 3CR BUY"
+                            nearBuyPoi -> "DEM/OVL POI + 3CR BUY"
+                            bullPowerAligned -> "SPWR BRK + 3CR BUY"
+                            else -> "3CR BUY Reversal"
                         }
                         openTrade = SimulatedTrade(
                             isLong = true,
@@ -755,6 +1193,8 @@ object TbtSmcEngine {
                 }
             }
             if (bear3cr) {
+                last3crSignalIndex = i
+                lastBearConfirmIndex = i
                 if (config.showSignals) {
                     addMarker(
                         TbtMarker(
@@ -767,7 +1207,7 @@ object TbtSmcEngine {
                         priority = 3
                     )
                 }
-                lastSignal = "3CR SELL Confirmed"
+                lastSignal = "3CR SELL"
                 if (openTrade == null) {
                     val entry = c.close
                     val rawSl = max(c.high, max(c1.high, c2.high))
@@ -775,10 +1215,10 @@ object TbtSmcEngine {
                     val risk = sl - entry
                     if (risk > 0.0) {
                         val reason = when {
-                            nearSellPoi && bearPowerAligned -> "Supply/Overlap Tap + Power Shift + 3CR SELL"
-                            nearSellPoi -> "Supply/Overlap POI + 3CR SELL"
-                            bearPowerAligned -> "Buyer Power Broken + 3CR SELL"
-                            else -> "TBT 3-Candle Reversal SELL"
+                            nearSellPoi && bearPowerAligned -> "SUP/OVL + BPWR + 3CR SELL"
+                            nearSellPoi -> "SUP/OVL POI + 3CR SELL"
+                            bearPowerAligned -> "BPWR BRK + 3CR SELL"
+                            else -> "3CR SELL Reversal"
                         }
                         openTrade = SimulatedTrade(
                             isLong = false,
@@ -796,7 +1236,6 @@ object TbtSmcEngine {
                 }
             }
 
-            // Also track Liquidity Grab & Power Break setups when no trade is active
             if (openTrade == null) {
                 if (bullLiqGrab) {
                     val entry = c.close
@@ -805,8 +1244,8 @@ object TbtSmcEngine {
                     if (risk > 0.0) {
                         openTrade = SimulatedTrade(
                             isLong = true,
-                            triggerName = "Liq Grab BUY",
-                            reason = if (nearBuyPoi) "2-Candle Liq Grab @ Demand/Overlap POI" else "2-Candle Liquidity Pool Grab BUY",
+                            triggerName = "LIQ BUY",
+                            reason = if (nearBuyPoi) "LIQ Sweep @ DEM/OVL" else "LIQ Sweep BUY",
                             entryPrice = entry,
                             stopLoss = sl,
                             takeProfit = entry + risk * safeRR,
@@ -823,8 +1262,8 @@ object TbtSmcEngine {
                     if (risk > 0.0) {
                         openTrade = SimulatedTrade(
                             isLong = false,
-                            triggerName = "Liq Grab SELL",
-                            reason = if (nearSellPoi) "2-Candle Liq Grab @ Supply/Overlap POI" else "2-Candle Liquidity Pool Grab SELL",
+                            triggerName = "LIQ SELL",
+                            reason = if (nearSellPoi) "LIQ Sweep @ SUP/OVL" else "LIQ Sweep SELL",
                             entryPrice = entry,
                             stopLoss = sl,
                             takeProfit = entry - risk * safeRR,
@@ -842,8 +1281,8 @@ object TbtSmcEngine {
                     if (risk > 0.0) {
                         openTrade = SimulatedTrade(
                             isLong = true,
-                            triggerName = "Power Break BUY",
-                            reason = "Seller Power Broken (Buyers in Control)",
+                            triggerName = "SPWR BRK",
+                            reason = "SPWR Broken (Buyers Control)",
                             entryPrice = entry,
                             stopLoss = sl,
                             takeProfit = entry + risk * safeRR,
@@ -861,8 +1300,8 @@ object TbtSmcEngine {
                     if (risk > 0.0) {
                         openTrade = SimulatedTrade(
                             isLong = false,
-                            triggerName = "Power Break SELL",
-                            reason = "Buyer Power Broken (Sellers in Control)",
+                            triggerName = "BPWR BRK",
+                            reason = "BPWR Broken (Sellers Control)",
                             entryPrice = entry,
                             stopLoss = sl,
                             takeProfit = entry - risk * safeRR,
@@ -878,232 +1317,143 @@ object TbtSmcEngine {
 
         val priceLines = mutableListOf<TbtPriceLine>()
         val recentZones = activeZones.takeLast(4).map { it.toImmutable() }
-
-        if (config.showZones) {
-            for (z in recentZones) {
-                if (z.type == TbtZoneType.DEMAND) {
-                    priceLines.add(
-                        TbtPriceLine(
-                            price = z.top,
-                            title = z.label,
-                            colorHex = if (z.tapped) "rgba(0, 200, 83, 0.45)" else "#00c853",
-                            lineStyle = if (z.tapped) 2 else 0,
-                            lineWidth = 1,
-                            category = TbtPriceLineCategory.ZONE
-                        )
-                    )
-                } else if (z.type == TbtZoneType.SUPPLY) {
-                    priceLines.add(
-                        TbtPriceLine(
-                            price = z.bottom,
-                            title = z.label,
-                            colorHex = if (z.tapped) "rgba(255, 23, 68, 0.45)" else "#ff1744",
-                            lineStyle = if (z.tapped) 2 else 0,
-                            lineWidth = 1,
-                            category = TbtPriceLineCategory.ZONE
-                        )
-                    )
-                }
-            }
-        }
-
-        if (config.showPowerShift) {
-            activeBullPower?.let { price ->
-                priceLines.add(
-                    TbtPriceLine(
-                        price = price,
-                        title = "⚡ Buyer Power Shift",
-                        colorHex = "#ffd600",
-                        lineStyle = 2,
-                        lineWidth = 2,
-                        category = TbtPriceLineCategory.POWER_SHIFT
-                    )
-                )
-            }
-            activeBearPower?.let { price ->
-                priceLines.add(
-                    TbtPriceLine(
-                        price = price,
-                        title = "⚡ Seller Power Shift",
-                        colorHex = "#ffd600",
-                        lineStyle = 2,
-                        lineWidth = 2,
-                        category = TbtPriceLineCategory.POWER_SHIFT
-                    )
-                )
-            }
-        }
-
-        if (config.showOverlap) {
-            for (ov in overlapLevels) {
-                priceLines.add(
-                    TbtPriceLine(
-                        price = ov.price,
-                        title = "Overlapping (${ov.type} POI)",
-                        colorHex = "#aa00ff",
-                        lineStyle = 1,
-                        lineWidth = 1,
-                        category = TbtPriceLineCategory.OVERLAP
-                    )
-                )
-            }
-        }
-
         val viCandidatePrice = latestViPrice ?: latestFvgMidPrice
         val viCandidateBull = if (latestViPrice != null) latestViIsBull else latestFvgIsBull
 
-        // Single Volume Imbalance Entry Line
-        if (config.showVolImbalanceLine && viCandidatePrice != null && viCandidatePrice > 0.0) {
-            priceLines.add(
-                TbtPriceLine(
-                    price = viCandidatePrice,
-                    title = "Vol Imbalance",
-                    colorHex = if (viCandidateBull) "#00e5ff" else "#ff9100",
-                    lineStyle = 2,
-                    lineWidth = 1,
-                    category = TbtPriceLineCategory.VOL_IMBALANCE
+        if (buildVisuals) {
+            if (config.showZones) {
+                for (z in recentZones) {
+                    if (z.type == TbtZoneType.DEMAND) {
+                        priceLines.add(
+                            TbtPriceLine(
+                                price = z.top,
+                                title = z.label,
+                                colorHex = if (z.tapped) "rgba(0, 200, 83, 0.45)" else "#00c853",
+                                lineStyle = if (z.tapped) 2 else 0,
+                                lineWidth = 1,
+                                category = TbtPriceLineCategory.ZONE
+                            )
+                        )
+                    } else if (z.type == TbtZoneType.SUPPLY) {
+                        priceLines.add(
+                            TbtPriceLine(
+                                price = z.bottom,
+                                title = z.label,
+                                colorHex = if (z.tapped) "rgba(255, 23, 68, 0.45)" else "#ff1744",
+                                lineStyle = if (z.tapped) 2 else 0,
+                                lineWidth = 1,
+                                category = TbtPriceLineCategory.ZONE
+                            )
+                        )
+                    }
+                }
+            }
+
+            if (config.showPowerShift) {
+                activeBullPower?.let { price ->
+                    priceLines.add(
+                        TbtPriceLine(
+                            price = price,
+                            title = "BPWR",
+                            colorHex = "#ffd600",
+                            lineStyle = 2,
+                            lineWidth = 2,
+                            category = TbtPriceLineCategory.POWER_SHIFT
+                        )
+                    )
+                }
+                activeBearPower?.let { price ->
+                    priceLines.add(
+                        TbtPriceLine(
+                            price = price,
+                            title = "SPWR",
+                            colorHex = "#ffd600",
+                            lineStyle = 2,
+                            lineWidth = 2,
+                            category = TbtPriceLineCategory.POWER_SHIFT
+                        )
+                    )
+                }
+            }
+
+            if (config.showOverlap) {
+                for (ov in overlapLevels) {
+                    priceLines.add(
+                        TbtPriceLine(
+                            price = ov.price,
+                            title = "OVL ${ov.type}",
+                            colorHex = "#aa00ff",
+                            lineStyle = 1,
+                            lineWidth = 1,
+                            category = TbtPriceLineCategory.OVERLAP
+                        )
+                    )
+                }
+            }
+
+            if (config.showVolImbalanceLine && viCandidatePrice != null && viCandidatePrice > 0.0) {
+                priceLines.add(
+                    TbtPriceLine(
+                        price = viCandidatePrice,
+                        title = "VI",
+                        colorHex = if (viCandidateBull) "#00e5ff" else "#ff9100",
+                        lineStyle = 2,
+                        lineWidth = 1,
+                        category = TbtPriceLineCategory.VOL_IMBALANCE
+                    )
                 )
-            )
+            }
         }
 
-        val lastCandle = candles.last()
+        val lastIdx = candles.lastIndex
+        val lastCandle = candles[lastIdx]
         val recentCloses = candles.takeLast(20)
-        val ema20 = recentCloses.sumOf { it.close } / recentCloses.size.toDouble()
+        val sma20 = recentCloses.sumOf { it.close } / recentCloses.size.toDouble()
+        val lastAtr = getSma(trueRanges, lastIdx, 14)
+
+        // Blend SMA20 + causal swing structure for cleaner multi-timeframe trend detection
+        val recentSlice = candles.takeLast(min(40, candles.size))
+        val half = recentSlice.size / 2
+        val hhHl = recentSlice.drop(half).maxOf { it.high } > recentSlice.take(half).maxOf { it.high } &&
+            recentSlice.drop(half).minOf { it.low } >= recentSlice.take(half).minOf { it.low } * 0.999
+        val lhLl = recentSlice.drop(half).minOf { it.low } < recentSlice.take(half).minOf { it.low } &&
+            recentSlice.drop(half).maxOf { it.high } <= recentSlice.take(half).maxOf { it.high } * 1.001
+
         val bias = when {
-            lastCandle.close > ema20 * 1.001 -> TbtMarketBias.BULLISH
-            lastCandle.close < ema20 * 0.999 -> TbtMarketBias.BEARISH
+            lastCandle.close > sma20 * 1.001 || (lastCandle.close > sma20 && hhHl) -> TbtMarketBias.BULLISH
+            lastCandle.close < sma20 * 0.999 || (lastCandle.close < sma20 && lhLl) -> TbtMarketBias.BEARISH
             else -> TbtMarketBias.SIDEWAYS
         }
 
-        // Build actionable TBT SMC BUY / SELL Trade Setup (with Entry, optional VI Retrace, SL, TP & checklist)
-        val activeSetup = openTrade?.let { active ->
-            val direction = if (active.isLong) TbtTradeDirection.BUY else TbtTradeDirection.SELL
-            val effectiveHtfBias = htfBias ?: bias
-            val htfAligned = (active.isLong && effectiveHtfBias == TbtMarketBias.BULLISH) ||
-                (!active.isLong && effectiveHtfBias == TbtMarketBias.BEARISH)
-            val riskPct = if (active.entryPrice > 0.0) {
-                (abs(active.entryPrice - active.stopLoss) / active.entryPrice) * 100.0
-            } else 0.0
-
-            val validRetraceVi = viCandidatePrice?.takeIf { vi ->
-                if (active.isLong) {
-                    vi > active.stopLoss && vi < active.entryPrice
-                } else {
-                    vi < active.stopLoss && vi > active.entryPrice
-                }
-            }
-
-            val htfCheckLabel = if (htfLabel != null && htfBias != null) {
-                "$htfLabel API Trend (${htfBias.label})"
-            } else {
-                "Trend Bias (${bias.label})"
-            }
-
-            val checklist = listOf(
-                TbtChecklistItem(htfCheckLabel, htfAligned),
-                TbtChecklistItem("Demand/Supply or Overlap POI", active.poiAligned),
-                TbtChecklistItem("TBT Power Shift Control", active.powerAligned),
-                TbtChecklistItem("Trigger: ${active.triggerName}", true),
-                TbtChecklistItem("Binance Volume Confirmation", active.volumeConfirmed)
-            )
-            val score = checklist.count { it.met }
-            val grade = when {
-                score >= 4 -> "A+"
-                score == 3 -> "A"
-                else -> "B"
-            }
-
-            if (config.showSignals) {
-                val rrLabel = if (safeRR % 1.0 == 0.0) {
-                    safeRR.toInt().toString()
-                } else {
-                    String.format(Locale.US, "%.1f", safeRR)
-                }
-                priceLines.add(
-                    TbtPriceLine(
-                        price = active.entryPrice,
-                        title = if (active.isLong) "BUY ENTRY" else "SELL ENTRY",
-                        colorHex = if (active.isLong) "#00e676" else "#ff5252",
-                        lineStyle = 0,
-                        lineWidth = 1,
-                        category = TbtPriceLineCategory.TRADE_ENTRY
-                    )
-                )
-                priceLines.add(
-                    TbtPriceLine(
-                        price = active.stopLoss,
-                        title = "SL",
-                        colorHex = "#ff1744",
-                        lineStyle = 1,
-                        lineWidth = 1,
-                        category = TbtPriceLineCategory.TRADE_SL
-                    )
-                )
-                priceLines.add(
-                    TbtPriceLine(
-                        price = active.takeProfit,
-                        title = "TP 1:$rrLabel",
-                        colorHex = "#00c853",
-                        lineStyle = 1,
-                        lineWidth = 1,
-                        category = TbtPriceLineCategory.TRADE_TP
-                    )
-                )
-            }
-
-            TbtTradeSetup(
-                direction = direction,
-                triggerName = active.triggerName,
-                reason = active.reason,
-                grade = grade,
-                score = score,
-                entryPrice = active.entryPrice,
-                retracementEntryPrice = validRetraceVi,
-                stopLoss = active.stopLoss,
-                takeProfit = active.takeProfit,
-                riskReward = safeRR,
-                riskPercent = riskPct,
-                htfLabel = htfLabel,
-                htfBias = htfBias,
-                volumeConfirmed = active.volumeConfirmed,
-                checklist = checklist,
-                signalTimeMillis = active.signalTimeMillis
-            )
-        }
-
-        val sortedMarkers = markersMap.values
-            .map { it.second }
-            .sortedBy { it.timeMillis }
-
-        val totalTrades = wins + losses
-        val winRate = if (totalTrades > 0) ((wins * 100.0) / totalTrades.toDouble()).roundToInt() else null
-        val netR = if (totalTrades > 0) {
-            val rawNet = wins * safeRR - losses * 1.0
-            (rawNet * 10.0).roundToInt() / 10.0
+        val sortedMarkers = if (buildVisuals) {
+            markersMap.values.map { it.second }.sortedBy { it.timeMillis }
         } else {
-            null
+            emptyList()
         }
 
-        return TbtSmcOutput(
+        val recentBullConfirm = (lastIdx - lastBullConfirmIndex) <= 6 || (openTrade?.isLong == true)
+        val recentBearConfirm = (lastIdx - lastBearConfirmIndex) <= 6 || (openTrade?.isLong == false)
+
+        return CoreScanResult(
             markers = sortedMarkers,
             priceLines = priceLines,
-            zones = recentZones,
-            summary = TbtConditionSummary(
-                bias = bias,
-                htfLabel = htfLabel,
-                htfBias = htfBias,
-                activeBullPower = activeBullPower,
-                activeBearPower = activeBearPower,
-                lastSignal = lastSignal
-            ),
-            backtestReport = TbtBacktestReport(
-                totalTrades = totalTrades,
-                wins = wins,
-                losses = losses,
-                winRate = winRate,
-                netR = netR
-            ),
-            activeSetup = activeSetup
+            recentZones = recentZones,
+            bias = bias,
+            activeBullPower = activeBullPower,
+            activeBearPower = activeBearPower,
+            lastSignal = lastSignal,
+            openTrade = openTrade,
+            viCandidatePrice = viCandidatePrice,
+            wins = wins,
+            losses = losses,
+            recentBullConfirm = recentBullConfirm,
+            recentBearConfirm = recentBearConfirm,
+            nearDemandPoi = isNearBuyPoi(lastIdx, lastCandle.low, lastCandle.close, lastAtr),
+            nearSupplyPoi = isNearSellPoi(lastIdx, lastCandle.high, lastCandle.close, lastAtr),
+            hasOverlapBuy = overlapLevels.any { it.type == "BUY" },
+            hasOverlapSell = overlapLevels.any { it.type == "SELL" },
+            lastDemandTapped = (lastIdx - lastDemandTapIndex) <= 8,
+            lastSupplyTapped = (lastIdx - lastSupplyTapIndex) <= 8
         )
     }
 }

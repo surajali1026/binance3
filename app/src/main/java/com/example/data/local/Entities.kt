@@ -216,12 +216,13 @@ data class ChartPreferencesEntity(
     val tbtShowOverlap: Boolean = true,
     val tbtShowSignals: Boolean = true,
     val tbtShowHud: Boolean = true,
-    val tbtAutoHideOnHtf: Boolean = true,
+    val tbtAutoHideOnHtf: Boolean = false,
     val tbtTargetRR: Double = 3.0,
     val tbtSlBufferPct: Double = 0.05,
-    val tbtUseKillzone: Boolean = true,
+    val tbtUseKillzone: Boolean = false,
     val tbtShowVolImbalanceLine: Boolean = true,
-    val tbtShowZoneTags: Boolean = true
+    val tbtShowZoneTags: Boolean = true,
+    val tbtMtfProfile: String = com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H.name
 ) {
     fun toDomain(): ChartPreferences = ChartPreferences(
         lastSymbol = lastSymbol,
@@ -248,7 +249,10 @@ data class ChartPreferencesEntity(
         tbtSlBufferPct = tbtSlBufferPct,
         tbtUseKillzone = tbtUseKillzone,
         tbtShowVolImbalanceLine = tbtShowVolImbalanceLine,
-        tbtShowZoneTags = tbtShowZoneTags
+        tbtShowZoneTags = tbtShowZoneTags,
+        tbtMtfProfile = runCatching {
+            com.example.domain.indicator.TbtMtfProfile.valueOf(tbtMtfProfile)
+        }.getOrDefault(com.example.domain.indicator.TbtMtfProfile.INTRADAY_1H)
     )
 
     companion object {
@@ -278,7 +282,8 @@ data class ChartPreferencesEntity(
             tbtSlBufferPct = prefs.tbtSlBufferPct,
             tbtUseKillzone = prefs.tbtUseKillzone,
             tbtShowVolImbalanceLine = prefs.tbtShowVolImbalanceLine,
-            tbtShowZoneTags = prefs.tbtShowZoneTags
+            tbtShowZoneTags = prefs.tbtShowZoneTags,
+            tbtMtfProfile = prefs.tbtMtfProfile.name
         )
     }
 }
